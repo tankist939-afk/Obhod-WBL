@@ -1,4 +1,4 @@
-name: Run OBWL Checker
+name: Run Obhod WBL Checker
 
 on:
   schedule:
