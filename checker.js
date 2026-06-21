@@ -1,10 +1,11 @@
 const fs = require('fs');
 const https = require('https');
+const tls = require('tls'); // Используем модуль tls для более точной проверки
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
-const PARALLEL_LIMIT = 50;     // Сколько прокси проверять ОДНОВРЕМЕННО (потоки)
-const TIMEOUT = 800;           // Таймаут проверки порта в миллисекундах
+const PARALLEL_LIMIT = 40;     // Чуть снизили лимит для стабильности TLS-сессий
+const TIMEOUT = 1200;          // Для TLS-рукопожатия нужно чуть больше времени (в мс)
 
 // ======================== СПИСКИ ФИЛЬТРАЦИИ ========================
 const WHITELIST_DOMAINS = [
@@ -151,21 +152,47 @@ function fetchUrl(url) {
   });
 }
 
-// Сетевой параллельный чекер портов
-function checkPort(host, port) {
+// УЛУЧШЕННЫЙ ЧЕКЕР: Проверка TLS-рукопожатия (ближе к v2rayNG)
+function checkTLS(host, port, sni) {
   return new Promise((resolve) => {
-    const socket = require('net').createConnection({
+    let resolved = false;
+
+    const options = {
       host: host,
       port: parseInt(port, 10),
+      servername: sni || host, // Передаем SNI, если он есть
+      rejectUnauthorized: false, // Не падаем на самоподписанных сертификатах
       timeout: TIMEOUT
+    };
+
+    const socket = tls.connect(options, () => {
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+        resolve(true); // Успешный TLS Handshake! Прокси точно живой.
+      }
     });
-    socket.on('connect', () => { socket.destroy(); resolve(true); });
+
     socket.on('error', (err) => {
-      socket.destroy();
-      if (err.message.includes('ECONNREFUSED') || err.message.includes('RESET')) resolve(true);
-      else resolve(false);
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+        // Сервер сбросил соединение или не ответил по TLS, но порт открыт
+        if (err.message.includes('ECONNREFUSED') || err.message.includes('RESET')) {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      }
     });
-    socket.on('timeout', () => { socket.destroy(); resolve(false); });
+
+    socket.on('timeout', () => {
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+        resolve(false);
+      }
+    });
   });
 }
 
@@ -191,7 +218,6 @@ async function main() {
         comment = line.substring(hIdx + 1).trim();
       }
 
-      // Если в оригинальном конфиге не было имени, даем базовое
       if (!comment) comment = 'Proxy';
 
       let sni = '';
@@ -206,7 +232,7 @@ async function main() {
       }
 
       let isGood = false;
-      let label = comment; // Переносим оригинальное название с флагами сюда
+      let label = comment;
 
       if (sni && isWhitelistedSNI(sni)) {
         isGood = true;
@@ -221,25 +247,26 @@ async function main() {
 
       if (isGood) {
         seenUrls.add(line);
-        rawConfigs.push({ urlPart, label });
+        // Сохраняем SNI для чекера
+        rawConfigs.push({ urlPart, label, sni });
         if (rawConfigs.length >= MAX_CONFIGS) break;
       }
     }
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Собрано подходящих по фильтрам: ${rawConfigs.length} шт. Начинаем многопоточный чек...`);
+  console.log(`📥 Собрано подходящих по фильтрам: ${rawConfigs.length} шт. Начинаем многопоточный TLS чек...`);
 
   const liveConfigs = [];
-  // Параллельный перебор пулом
+  
   for (let i = 0; i < rawConfigs.length; i += PARALLEL_LIMIT) {
     const chunk = rawConfigs.slice(i, i + PARALLEL_LIMIT);
     await Promise.all(chunk.map(async (cfg) => {
       let m = cfg.urlPart.match(/@([^:]+):([0-9]+)/);
       if (!m) m = cfg.urlPart.match(/:\/\/([^:]+):([0-9]+)/);
       if (m) {
-        const alive = await checkPort(m[1], m[2]);
-        // Модифицировано: пишется "Obhod WBL" вместо "Checked"
+        // Вызываем новый TLS чекер вместо старого checkPort
+        const alive = await checkTLS(m[1], m[2], cfg.sni);
         if (alive) liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Obhod WBL`);
       }
     }));
@@ -247,7 +274,6 @@ async function main() {
 
   console.log(`✅ Чек окончен! Живых найдено: ${liveConfigs.length}`);
   
-  // Формируем файл подписки
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 Живых прокси: ${liveConfigs.length} | Обновлено: ${timestamp} UTC\n\n`;
   
