@@ -192,10 +192,17 @@ async function main() {
         comment = line.substring(hIdx + 1).trim();
       }
 
-      let sni = '';
-      const sniMatch = line.match(/[?&]sni=([^&]+)/);
-      if (sniMatch) sni = decodeURIComponent(sniMatch[1]);
-
+     let sni = '';
+const sniMatch = line.match(/[?&]sni=([^&]+)/);
+if (sniMatch) {
+  try {
+    sni = decodeURIComponent(sniMatch[1]);
+  } catch (e) {
+    // Если попался деформированный URI, просто логируем или игнорируем его
+    console.log(`⚠️ Не удалось декодировать SNI в строке: ${sniMatch[1]}`);
+    sni = sniMatch[1]; // оставляем как есть, чтобы скрипт не падал
+  }
+}
       let isGood = false;
       let label = '🌐 Proxy';
 
