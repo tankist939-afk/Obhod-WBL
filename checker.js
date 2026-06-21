@@ -1,13 +1,11 @@
 const fs = require('fs');
 const https = require('https');
 const tls = require('tls');
-const crypto = require('crypto');
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
-const PARALLEL_LIMIT = 25;     // Оптимально для параллельных HTTP-запросов через туннели
-const TIMEOUT = 2000;          // Даем 2 секунды на полный круг: Скрипт -> Прокси -> Сайт -> Скрипт
-const TEST_URL = 'https://httpbin.org/ip'; // Тестовый сайт для проверки выхода в интернет
+const PARALLEL_LIMIT = 40;     // Количество одновременных подключений
+const MAX_PING = 700;          // Максимальное время ответа в мс (все что медленнее — удаляем)
 
 // ======================== СПИСКИ ФИЛЬТРАЦИИ ========================
 const WHITELIST_DOMAINS = [
@@ -139,6 +137,13 @@ function extractIP(url) {
   return m ? m[1] : null;
 }
 
+function extractFlags(text) {
+  if (!text) return '🌐';
+  const flagRegex = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/g;
+  const matches = text.match(flagRegex);
+  return matches ? matches.join('') : '🌐';
+}
+
 function fetchUrl(url) {
   return new Promise((resolve) => {
     const req = https.get(url, { timeout: 5000 }, (res) => {
@@ -152,30 +157,29 @@ function fetchUrl(url) {
   });
 }
 
-// УЛЬТИМАТИВНЫЙ ЧЕКЕР: TLS-соединение + Реальный HTTP-тест через туннель прокси
-function realInternetCheckProxy(host, port, sni, uuid) {
+function checkTlsWithPing(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
+    const startTime = Date.now();
 
     const timeoutTimer = setTimeout(() => {
       cleanup(false);
-    }, TIMEOUT);
+    }, MAX_PING);
 
     const options = {
       host: host,
       port: parseInt(port, 10),
       servername: sni || host,
-      rejectUnauthorized: false, 
+      rejectUnauthorized: false,
+      timeout: MAX_PING,
       ciphers: 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256'
     };
 
     let socket;
     try {
       socket = tls.connect(options, () => {
-        // Шаг 1: Имитируем прокси-запрос туннелирования (HTTP CONNECT) до тестового сайта.
-        // Это заставляет ядро Xray на той стороне открыть реальный веб-сайт.
-        const reqHeader = `CONNECT httpbin.org:443 HTTP/1.1\r\nHost: httpbin.org:443\r\nProxy-Connection: Keep-Alive\r\n\r\n`;
-        socket.write(reqHeader);
+        const ping = Date.now() - startTime;
+        cleanup(ping < MAX_PING);
       });
     } catch (e) {
       return cleanup(false);
@@ -190,34 +194,13 @@ function realInternetCheckProxy(host, port, sni, uuid) {
       }
     }
 
-    let isTunneled = false;
-    socket.on('data', (data) => {
-      const responseStr = data.toString();
-
-      // Шаг 2: Если прокси ответил "200 Connection Established", значит туннель до интернета открыт!
-      if (!isTunneled && (responseStr.includes("200 OK") || responseStr.includes("Established"))) {
-        isTunneled = true;
-        // Шаг 3: Отправляем запрос сайту РЕЗОЛВЕРУ прямо внутрь туннеля прокси
-        socket.write("GET /ip HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n");
-        return;
-      }
-
-      // Шаг 4: Проверяем, вернул ли нам тестовый сайт валидный JSON со своим IP-адресом
-      if (isTunneled && (responseStr.includes("origin") || responseStr.includes("HTTP/1.1 200"))) {
-        cleanup(true); // Прокси полностью рабочий и имеет выход во внешний интернет!
-      } else {
-        // Любые ошибки 400, сбросы или кривые данные от Reality-заглушек ведут к отсеву
-        cleanup(false);
-      }
-    });
-
     socket.on('error', () => cleanup(false));
     socket.on('timeout', () => cleanup(false));
   });
 }
 
 async function main() {
-  console.log(`🚀 Начинаем ультимативный сбор и полный интернет-чек конфигов...`);
+  console.log(`🚀 Начинаем сбалансированный сбор конфигов...`);
   const rawConfigs = [];
   const seenUrls = new Set();
 
@@ -238,8 +221,6 @@ async function main() {
         comment = line.substring(hIdx + 1).trim();
       }
 
-      if (!comment) comment = 'Proxy';
-
       let sni = '';
       const sniMatch = line.match(/[?&]sni=([^&]+)/);
       if (sniMatch) {
@@ -251,16 +232,18 @@ async function main() {
       }
 
       let isGood = false;
-      let label = comment;
+      let label = '';
+      const flags = extractFlags(comment);
 
+      // Здесь убрали квадратные скобки из строк шаблона
       if (sni && isWhitelistedSNI(sni)) {
         isGood = true;
-        label = `${comment} | [SNI: ${sni}]`; 
+        label = `${flags} SNI: ${sni}`; 
       } else {
         const ip = extractIP(urlPart);
         if (ip && isWhitelistedIP(ip)) {
           isGood = true;
-          label = `${comment} | [CIDR: ${ip}]`;
+          label = `${flags} CIDR: ${ip}`;
         }
       }
 
@@ -273,7 +256,7 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Запускаем тест выхода в интернет...`);
+  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Измеряем скорость TLS-ответа...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -288,8 +271,7 @@ async function main() {
       if (!m) m = cfg.urlPart.match(/:\/\/([^:]+):([0-9]+)/);
       
       if (m) {
-        // Запуск сквозного интернет-теста
-        const alive = await realInternetCheckProxy(m[1], m[2], cfg.sni);
+        const alive = await checkTlsWithPing(m[1], m[2], cfg.sni);
         if (alive) {
           liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Obhod WBL`);
         }
@@ -300,13 +282,13 @@ async function main() {
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
-  console.log(`✅ Итоговый жесткий чек окончен! Живых с интернетом найдено: ${liveConfigs.length}`);
+  console.log(`✅ Чек окончен! Быстрых серверов найдено: ${liveConfigs.length}`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 100% Рабочие | Живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
+  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 Оптимизированный чек | Живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
-  console.log('💾 Файл configs.txt успешно обновлен и синхронизирован!');
+  console.log('💾 Файл configs.txt успешно сохранен!');
 }
 
 main();
