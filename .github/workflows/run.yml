@@ -2,12 +2,17 @@ name: Run Obhod WBL Checker
 
 on:
   schedule:
-    - cron: '0 */1 * * *' # Будет запускаться автоматически каждые 2 часа
+    - cron: '0 */1 * * *' # Будет запускаться автоматически каждый час
   workflow_dispatch:     # Позволит запускать скрипт руками кнопкой
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # КРИТИЧНО: Даем права на запись для выполнения git push
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,5 +30,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add configs.txt
-          git commit -m "Auto-update subscription configs" || exit 0
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-update subscription configs"
+            git push
+          else
+            echo "No changes to commit"
+          fi
