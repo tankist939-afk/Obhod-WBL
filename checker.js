@@ -1,5 +1,5 @@
 const fs = require('fs');
-const http = require('http');
+const https = require('https'); // <-- ИСПРАВЛЕНО: используем https вместо http
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
@@ -137,10 +137,11 @@ function extractIP(url) {
   return m ? m[1] : null;
 }
 
-// Быстрый асинхронный HTTP-запрос (скачивание списков)
+// Быстрый асинхронный HTTPS-запрос (скачивание списков)
 function fetchUrl(url) {
   return new Promise((resolve) => {
-    const req = http.get(url, { timeout: 5000 }, (res) => {
+    // ИСПРАВЛЕНО: Теперь вызывается https.get вместо http.get
+    const req = https.get(url, { timeout: 5000 }, (res) => {
       let data = '';
       if (res.statusCode !== 200) return resolve('');
       res.on('data', chunk => data += chunk);
