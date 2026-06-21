@@ -1,5 +1,5 @@
 const fs = require('fs');
-const https = require('https'); // <-- ИСПРАВЛЕНО: используем https вместо http
+const https = require('https');
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
@@ -89,7 +89,7 @@ const ALL_SOURCES = [
   "https://raw.githubusercontent.com/dmitriistekolnikov/Free_vpns_for_Russ/refs/heads/main/Vip.txt",
   "https://raw.githubusercontent.com/dmitriistekolnikov/Free_vpns_for_Russ/refs/heads/main/YouTube.txt",
   "https://raw.githubusercontent.com/ChkavHalyavaVPN/Chkav-HalyavaVPNUS-vpn-duo/refs/heads/main/vpn.txt",
-  "https://gist.githubusercontent.com/HalyavusVPNUS/a93def732d3c624029c09c393dd0772e/raw/afaa5733c4b9d573195cfb2af21030e2cb5c1ae3/%25D0%25BA%25D0%25BE%25D0%25BD%25D1%2584%25D0%25B8%25D0%25B3%25D0%25B8",
+  "https://gist.githubusercontent.com/HalyavusVPNUS/a93def732d3c624029c09c393dd0772e/raw/afaa5733c4b9d573195cfb2af21030e2cb5c1ae3/%25D0%25BA%25D0%25BE%25D0%25ND\x05%25D0%25B4%25D0%25B8%25D0%25B3%25D0%25B8",
   "https://base44.app/api/apps/6a142ae2965f19733954fc09/files/mp/public/6a142ae2965f19733954fc09/bd1b875de_subscription.txt",
   "https://gist.githubusercontent.com/j80547013-max/6abf8d9a407a9338ec82fc0754beeb99/raw/01890ab4a2fe739c77f1d45495d30ed80a15ab15/gistfile1.txt",
   "https://yax.nenadoblokirowatgnidda.ru/exec?url=http%3A%2F%2F77.110.104.181%3A5002%2Fsub%2FdGd0ZnRnLDE3ODA1ODc4MTI4fdXFeLwfA",
@@ -140,7 +140,6 @@ function extractIP(url) {
 // Быстрый асинхронный HTTPS-запрос (скачивание списков)
 function fetchUrl(url) {
   return new Promise((resolve) => {
-    // ИСПРАВЛЕНО: Теперь вызывается https.get вместо http.get
     const req = https.get(url, { timeout: 5000 }, (res) => {
       let data = '';
       if (res.statusCode !== 200) return resolve('');
@@ -192,28 +191,31 @@ async function main() {
         comment = line.substring(hIdx + 1).trim();
       }
 
-     let sni = '';
-const sniMatch = line.match(/[?&]sni=([^&]+)/);
-if (sniMatch) {
-  try {
-    sni = decodeURIComponent(sniMatch[1]);
-  } catch (e) {
-    // Если попался деформированный URI, просто логируем или игнорируем его
-    console.log(`⚠️ Не удалось декодировать SNI в строке: ${sniMatch[1]}`);
-    sni = sniMatch[1]; // оставляем как есть, чтобы скрипт не падал
-  }
-}
+      // Если в оригинальном конфиге не было имени, даем базовое
+      if (!comment) comment = 'Proxy';
+
+      let sni = '';
+      const sniMatch = line.match(/[?&]sni=([^&]+)/);
+      if (sniMatch) {
+        try {
+          sni = decodeURIComponent(sniMatch[1]);
+        } catch (e) {
+          console.log(`⚠️ Не удалось декодировать SNI в строке: ${sniMatch[1]}`);
+          sni = sniMatch[1]; 
+        }
+      }
+
       let isGood = false;
-      let label = '🌐 Proxy';
+      let label = comment; // Переносим оригинальное название с флагами сюда
 
       if (sni && isWhitelistedSNI(sni)) {
         isGood = true;
-        label = `🇷🇺 SNI: ${sni}`;
+        label = `${comment} | [SNI: ${sni}]`; 
       } else {
         const ip = extractIP(urlPart);
         if (ip && isWhitelistedIP(ip)) {
           isGood = true;
-          label = `🇷🇺 CIDR IP: ${ip}`;
+          label = `${comment} | [CIDR: ${ip}]`;
         }
       }
 
@@ -237,7 +239,8 @@ if (sniMatch) {
       if (!m) m = cfg.urlPart.match(/:\/\/([^:]+):([0-9]+)/);
       if (m) {
         const alive = await checkPort(m[1], m[2]);
-        if (alive) liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Checked`);
+        // Модифицировано: пишется "Obhod WBL" вместо "Checked"
+        if (alive) liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Obhod WBL`);
       }
     }));
   }
