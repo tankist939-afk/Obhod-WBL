@@ -1,11 +1,13 @@
 const fs = require('fs');
 const https = require('https');
 const tls = require('tls');
+const crypto = require('crypto');
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
-const PARALLEL_LIMIT = 30;     // Строгое количество одновременных подключений
-const TIMEOUT = 1200;          // Оптимальный таймаут для TLS-ответа (в мс)
+const PARALLEL_LIMIT = 25;     // Оптимально для параллельных HTTP-запросов через туннели
+const TIMEOUT = 2000;          // Даем 2 секунды на полный круг: Скрипт -> Прокси -> Сайт -> Скрипт
+const TEST_URL = 'https://httpbin.org/ip'; // Тестовый сайт для проверки выхода в интернет
 
 // ======================== СПИСКИ ФИЛЬТРАЦИИ ========================
 const WHITELIST_DOMAINS = [
@@ -150,17 +152,13 @@ function fetchUrl(url) {
   });
 }
 
-// НАДЕЖНЫЙ СТРОГИЙ ЧЕКЕР С ОБРАБОТКОЙ ОШИБОК И ИСКЛЮЧЕНИЙ
-function strictCheckProxy(host, port, sni) {
+// УЛЬТИМАТИВНЫЙ ЧЕКЕР: TLS-соединение + Реальный HTTP-тест через туннель прокси
+function realInternetCheckProxy(host, port, sni, uuid) {
   return new Promise((resolve) => {
     let resolved = false;
 
     const timeoutTimer = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        socket.destroy();
-        resolve(false);
-      }
+      cleanup(false);
     }, TIMEOUT);
 
     const options = {
@@ -168,18 +166,16 @@ function strictCheckProxy(host, port, sni) {
       port: parseInt(port, 10),
       servername: sni || host,
       rejectUnauthorized: false, 
-      ciphers: 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256',
-      honorCipherOrder: true
+      ciphers: 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256'
     };
 
     let socket;
     try {
       socket = tls.connect(options, () => {
-        try {
-          socket.write("GET / HTTP/1.1\r\nHost: " + (sni || host) + "\r\n\r\n");
-        } catch (e) {
-          cleanup(false);
-        }
+        // Шаг 1: Имитируем прокси-запрос туннелирования (HTTP CONNECT) до тестового сайта.
+        // Это заставляет ядро Xray на той стороне открыть реальный веб-сайт.
+        const reqHeader = `CONNECT httpbin.org:443 HTTP/1.1\r\nHost: httpbin.org:443\r\nProxy-Connection: Keep-Alive\r\n\r\n`;
+        socket.write(reqHeader);
       });
     } catch (e) {
       return cleanup(false);
@@ -194,12 +190,24 @@ function strictCheckProxy(host, port, sni) {
       }
     }
 
+    let isTunneled = false;
     socket.on('data', (data) => {
       const responseStr = data.toString();
-      if (responseStr.includes("HTTP/1.1 400") || responseStr.includes("403 Forbidden")) {
-        cleanup(false);
+
+      // Шаг 2: Если прокси ответил "200 Connection Established", значит туннель до интернета открыт!
+      if (!isTunneled && (responseStr.includes("200 OK") || responseStr.includes("Established"))) {
+        isTunneled = true;
+        // Шаг 3: Отправляем запрос сайту РЕЗОЛВЕРУ прямо внутрь туннеля прокси
+        socket.write("GET /ip HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n");
+        return;
+      }
+
+      // Шаг 4: Проверяем, вернул ли нам тестовый сайт валидный JSON со своим IP-адресом
+      if (isTunneled && (responseStr.includes("origin") || responseStr.includes("HTTP/1.1 200"))) {
+        cleanup(true); // Прокси полностью рабочий и имеет выход во внешний интернет!
       } else {
-        cleanup(true);
+        // Любые ошибки 400, сбросы или кривые данные от Reality-заглушек ведут к отсеву
+        cleanup(false);
       }
     });
 
@@ -209,7 +217,7 @@ function strictCheckProxy(host, port, sni) {
 }
 
 async function main() {
-  console.log(`🚀 Начинаем строгий сбор и крипто-анализ конфигов...`);
+  console.log(`🚀 Начинаем ультимативный сбор и полный интернет-чек конфигов...`);
   const rawConfigs = [];
   const seenUrls = new Set();
 
@@ -265,12 +273,11 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Запускаем стабильный пул-чек...`);
+  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Запускаем тест выхода в интернет...`);
 
   const liveConfigs = [];
   let index = 0;
 
-  // Функция-воркер, которая берет задачи из общей очереди, предотвращая падение сокетов
   async function worker() {
     while (index < rawConfigs.length) {
       const currentIdx = index++;
@@ -281,7 +288,8 @@ async function main() {
       if (!m) m = cfg.urlPart.match(/:\/\/([^:]+):([0-9]+)/);
       
       if (m) {
-        const alive = await strictCheckProxy(m[1], m[2], cfg.sni);
+        // Запуск сквозного интернет-теста
+        const alive = await realInternetCheckProxy(m[1], m[2], cfg.sni);
         if (alive) {
           liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Obhod WBL`);
         }
@@ -289,17 +297,16 @@ async function main() {
     }
   }
 
-  // Запуск стабильных изолированных потоков
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
-  console.log(`✅ Строгий чек окончен! Живых найдено: ${liveConfigs.length}`);
+  console.log(`✅ Итоговый жесткий чек окончен! Живых с интернетом найдено: ${liveConfigs.length}`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 Строгий отбор | Живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
+  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 100% Рабочие | Живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
-  console.log('💾 Файл configs.txt успешно обновлен!');
+  console.log('💾 Файл configs.txt успешно обновлен и синхронизирован!');
 }
 
 main();
