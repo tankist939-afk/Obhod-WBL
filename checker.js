@@ -4,8 +4,8 @@ const tls = require('tls');
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
-const PARALLEL_LIMIT = 30;     // Снизили для более глубокого анализа каждого соединения
-const TIMEOUT = 1500;          // Даем чуть больше времени на полный обмен пакетами (в мс)
+const PARALLEL_LIMIT = 30;     // Строгое количество одновременных подключений
+const TIMEOUT = 1200;          // Оптимальный таймаут для TLS-ответа (в мс)
 
 // ======================== СПИСКИ ФИЛЬТРАЦИИ ========================
 const WHITELIST_DOMAINS = [
@@ -150,65 +150,61 @@ function fetchUrl(url) {
   });
 }
 
-// ГЛУБОКИЙ КРИПТОГРАФИЧЕСКИЙ ЧЕКЕР (Имитация реального пинга v2rayNG)
+// НАДЕЖНЫЙ СТРОГИЙ ЧЕКЕР С ОБРАБОТКОЙ ОШИБОК И ИСКЛЮЧЕНИЙ
 function strictCheckProxy(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
+
+    const timeoutTimer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+        resolve(false);
+      }
+    }, TIMEOUT);
 
     const options = {
       host: host,
       port: parseInt(port, 10),
       servername: sni || host,
       rejectUnauthorized: false, 
-      timeout: TIMEOUT,
-      // Запрашиваем стандартные для прокси-протоколов типы шифрования
       ciphers: 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256',
       honorCipherOrder: true
     };
 
-    const socket = tls.connect(options, () => {
-      // Как только TLS-сессия открылась, отправляем фейковый HTTP-запрос, 
-      // чтобы спровоцировать Reality-сервер выдать себя.
-      socket.write("GET / HTTP/1.1\r\nHost: " + (sni || host) + "\r\n\r\n");
-    });
+    let socket;
+    try {
+      socket = tls.connect(options, () => {
+        try {
+          socket.write("GET / HTTP/1.1\r\nHost: " + (sni || host) + "\r\n\r\n");
+        } catch (e) {
+          cleanup(false);
+        }
+      });
+    } catch (e) {
+      return cleanup(false);
+    }
+
+    function cleanup(result) {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeoutTimer);
+        if (socket) socket.destroy();
+        resolve(result);
+      }
+    }
 
     socket.on('data', (data) => {
-      if (!resolved) {
-        resolved = true;
-        socket.destroy();
-        
-        const responseStr = data.toString();
-        // Если сервер на наш запрос выдает моментальный явный сброс 400/403/404 без прокси-заголовков,
-        // либо возвращает пустые бинарные данные, характерные для падения Xray — это плохой конфиг.
-        // РабочийReality-прокси промолчит, перенаправит пакет, либо вернет валидный кусок TLS.
-        if (responseStr.includes("HTTP/1.1 400") || responseStr.includes("403 Forbidden")) {
-          resolve(false); // Reality-заглушка спалилась
-        } else {
-          resolve(true);  // Похоже на реальный рабочий туннель
-        }
+      const responseStr = data.toString();
+      if (responseStr.includes("HTTP/1.1 400") || responseStr.includes("403 Forbidden")) {
+        cleanup(false);
+      } else {
+        cleanup(true);
       }
     });
 
-    socket.on('error', (err) => {
-      if (!resolved) {
-        resolved = true;
-        socket.destroy();
-        // Специфические ошибки цензуры/сброса (сервер забанен провайдером)
-        if (err.message.includes('ECONNREFUSED') || err.message.includes('ECONNRESET')) {
-          resolve(false); 
-        } else {
-          resolve(false);
-        }
-      }
-    });
-
-    socket.on('timeout', () => {
-      if (!resolved) {
-        resolved = true;
-        socket.destroy();
-        resolve(false);
-      }
-    });
+    socket.on('error', () => cleanup(false));
+    socket.on('timeout', () => cleanup(false));
   });
 }
 
@@ -269,22 +265,33 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Запускаем глубокий интерактивный чек...`);
+  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Запускаем стабильный пул-чек...`);
 
   const liveConfigs = [];
-  
-  for (let i = 0; i < rawConfigs.length; i += PARALLEL_LIMIT) {
-    const chunk = rawConfigs.slice(i, i + PARALLEL_LIMIT);
-    await Promise.all(chunk.map(async (cfg) => {
+  let index = 0;
+
+  // Функция-воркер, которая берет задачи из общей очереди, предотвращая падение сокетов
+  async function worker() {
+    while (index < rawConfigs.length) {
+      const currentIdx = index++;
+      const cfg = rawConfigs[currentIdx];
+      if (!cfg) continue;
+
       let m = cfg.urlPart.match(/@([^:]+):([0-9]+)/);
       if (!m) m = cfg.urlPart.match(/:\/\/([^:]+):([0-9]+)/);
+      
       if (m) {
-        // Запуск новой глубокой проверки
         const alive = await strictCheckProxy(m[1], m[2], cfg.sni);
-        if (alive) liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Obhod WBL`);
+        if (alive) {
+          liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Obhod WBL`);
+        }
       }
-    }));
+    }
   }
+
+  // Запуск стабильных изолированных потоков
+  const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
+  await Promise.all(workers);
 
   console.log(`✅ Строгий чек окончен! Живых найдено: ${liveConfigs.length}`);
   
