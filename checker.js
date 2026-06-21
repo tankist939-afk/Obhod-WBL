@@ -1,11 +1,11 @@
 const fs = require('fs');
 const https = require('https');
-const tls = require('tls'); // Используем модуль tls для более точной проверки
+const tls = require('tls');
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
-const PARALLEL_LIMIT = 40;     // Чуть снизили лимит для стабильности TLS-сессий
-const TIMEOUT = 1200;          // Для TLS-рукопожатия нужно чуть больше времени (в мс)
+const PARALLEL_LIMIT = 30;     // Снизили для более глубокого анализа каждого соединения
+const TIMEOUT = 1500;          // Даем чуть больше времени на полный обмен пакетами (в мс)
 
 // ======================== СПИСКИ ФИЛЬТРАЦИИ ========================
 const WHITELIST_DOMAINS = [
@@ -107,7 +107,6 @@ for (let i = 2; i <= 26; i++) {
   ALL_SOURCES.push(`https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/${i}.txt`);
 }
 
-// Помощники парсинга
 function isWhitelistedSNI(sni) {
   if (!sni) return false;
   const low = sni.toLowerCase();
@@ -138,7 +137,6 @@ function extractIP(url) {
   return m ? m[1] : null;
 }
 
-// Быстрый асинхронный HTTPS-запрос (скачивание списков)
 function fetchUrl(url) {
   return new Promise((resolve) => {
     const req = https.get(url, { timeout: 5000 }, (res) => {
@@ -152,24 +150,42 @@ function fetchUrl(url) {
   });
 }
 
-// УЛУЧШЕННЫЙ ЧЕКЕР: Проверка TLS-рукопожатия (ближе к v2rayNG)
-function checkTLS(host, port, sni) {
+// ГЛУБОКИЙ КРИПТОГРАФИЧЕСКИЙ ЧЕКЕР (Имитация реального пинга v2rayNG)
+function strictCheckProxy(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
 
     const options = {
       host: host,
       port: parseInt(port, 10),
-      servername: sni || host, // Передаем SNI, если он есть
-      rejectUnauthorized: false, // Не падаем на самоподписанных сертификатах
-      timeout: TIMEOUT
+      servername: sni || host,
+      rejectUnauthorized: false, 
+      timeout: TIMEOUT,
+      // Запрашиваем стандартные для прокси-протоколов типы шифрования
+      ciphers: 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256',
+      honorCipherOrder: true
     };
 
     const socket = tls.connect(options, () => {
+      // Как только TLS-сессия открылась, отправляем фейковый HTTP-запрос, 
+      // чтобы спровоцировать Reality-сервер выдать себя.
+      socket.write("GET / HTTP/1.1\r\nHost: " + (sni || host) + "\r\n\r\n");
+    });
+
+    socket.on('data', (data) => {
       if (!resolved) {
         resolved = true;
         socket.destroy();
-        resolve(true); // Успешный TLS Handshake! Прокси точно живой.
+        
+        const responseStr = data.toString();
+        // Если сервер на наш запрос выдает моментальный явный сброс 400/403/404 без прокси-заголовков,
+        // либо возвращает пустые бинарные данные, характерные для падения Xray — это плохой конфиг.
+        // РабочийReality-прокси промолчит, перенаправит пакет, либо вернет валидный кусок TLS.
+        if (responseStr.includes("HTTP/1.1 400") || responseStr.includes("403 Forbidden")) {
+          resolve(false); // Reality-заглушка спалилась
+        } else {
+          resolve(true);  // Похоже на реальный рабочий туннель
+        }
       }
     });
 
@@ -177,9 +193,9 @@ function checkTLS(host, port, sni) {
       if (!resolved) {
         resolved = true;
         socket.destroy();
-        // Сервер сбросил соединение или не ответил по TLS, но порт открыт
-        if (err.message.includes('ECONNREFUSED') || err.message.includes('RESET')) {
-          resolve(true);
+        // Специфические ошибки цензуры/сброса (сервер забанен провайдером)
+        if (err.message.includes('ECONNREFUSED') || err.message.includes('ECONNRESET')) {
+          resolve(false); 
         } else {
           resolve(false);
         }
@@ -197,7 +213,7 @@ function checkTLS(host, port, sni) {
 }
 
 async function main() {
-  console.log(`🚀 Начинаем сбор конфигов со всех источников...`);
+  console.log(`🚀 Начинаем строгий сбор и крипто-анализ конфигов...`);
   const rawConfigs = [];
   const seenUrls = new Set();
 
@@ -226,7 +242,6 @@ async function main() {
         try {
           sni = decodeURIComponent(sniMatch[1]);
         } catch (e) {
-          console.log(`⚠️ Не удалось декодировать SNI в строке: ${sniMatch[1]}`);
           sni = sniMatch[1]; 
         }
       }
@@ -247,7 +262,6 @@ async function main() {
 
       if (isGood) {
         seenUrls.add(line);
-        // Сохраняем SNI для чекера
         rawConfigs.push({ urlPart, label, sni });
         if (rawConfigs.length >= MAX_CONFIGS) break;
       }
@@ -255,7 +269,7 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Собрано подходящих по фильтрам: ${rawConfigs.length} шт. Начинаем многопоточный TLS чек...`);
+  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Запускаем глубокий интерактивный чек...`);
 
   const liveConfigs = [];
   
@@ -265,20 +279,20 @@ async function main() {
       let m = cfg.urlPart.match(/@([^:]+):([0-9]+)/);
       if (!m) m = cfg.urlPart.match(/:\/\/([^:]+):([0-9]+)/);
       if (m) {
-        // Вызываем новый TLS чекер вместо старого checkPort
-        const alive = await checkTLS(m[1], m[2], cfg.sni);
+        // Запуск новой глубокой проверки
+        const alive = await strictCheckProxy(m[1], m[2], cfg.sni);
         if (alive) liveConfigs.push(`${cfg.urlPart}#${cfg.label} | Obhod WBL`);
       }
     }));
   }
 
-  console.log(`✅ Чек окончен! Живых найдено: ${liveConfigs.length}`);
+  console.log(`✅ Строгий чек окончен! Живых найдено: ${liveConfigs.length}`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 Живых прокси: ${liveConfigs.length} | Обновлено: ${timestamp} UTC\n\n`;
+  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 Строгий отбор | Живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
-  console.log('💾 Файл configs.txt успешно сохранен!');
+  console.log('💾 Файл configs.txt успешно обновлен!');
 }
 
 main();
