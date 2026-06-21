@@ -5,7 +5,7 @@ const tls = require('tls');
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 5000;      // Сколько всего конфигов собираем из источников
 const PARALLEL_LIMIT = 40;     // Количество одновременных подключений
-const MAX_PING = 700;          // Максимальное время ответа в мс (все что медленнее — удаляем)
+const MAX_PING = 250;          // СВЕРХСТРОГИЙ ПИНГ (250мс) — отсекаем лагающие и полумертвые сервера
 
 // ======================== СПИСКИ ФИЛЬТРАЦИИ ========================
 const WHITELIST_DOMAINS = [
@@ -92,7 +92,7 @@ const ALL_SOURCES = [
   "https://raw.githubusercontent.com/ChkavHalyavaVPN/Chkav-HalyavaVPNUS-vpn-duo/refs/heads/main/vpn.txt",
   "https://gist.githubusercontent.com/HalyavusVPNUS/a93def732d3c624029c09c393dd0772e/raw/afaa5733c4b9d573195cfb2af21030e2cb5c1ae3/%25D0%25BA%25D0%25BE%25D0%25ND\x05%25D0%25B4%25D0%25B8%25D0%25B3%25D0%25B8",
   "https://base44.app/api/apps/6a142ae2965f19733954fc09/files/mp/public/6a142ae2965f19733954fc09/bd1b875de_subscription.txt",
-  "https://gist.githubusercontent.com/j80547013-max/6abf8d9a407a9338ec82fc0754beeb99/raw/01890ab4a2fe739c77f1d45495d30ed80a15ab15/gistfile1.txt",
+  "https://gist.githubusercontent.com/j80547013-max/6abf8d9a407a9338ec82fc0754beeb99/raw/01890ab4a2fe739c77f1d45495d30ed80a15ac15/gistfile1.txt",
   "https://yax.nenadoblokirowatgnidda.ru/exec?url=http%3A%2F%2F77.110.104.181%3A5002%2Fsub%2FdGd0ZnRnLDE3ODA1ODc4MTI4fdXFeLwfA",
   "https://vspsub.onrender.com/get/88tzen", "https://109.237.98.81:2096/kvn/7qpy5bx22ejc4d5i",
   "https://gist.githubusercontent.com/moksim76/19e5c747b19f9ab4610609bcde01fb3d/raw/5d9ac6883ceb0a9e2e94040defabb8b97c1f317d/XuexVpn%2520Free",
@@ -200,9 +200,10 @@ function checkTlsWithPing(host, port, sni) {
 }
 
 async function main() {
-  console.log(`🚀 Начинаем сбалансированный сбор конфигов...`);
+  console.log(`🚀 Начинаем строгий и чистый сбор конфигов...`);
   const rawConfigs = [];
   const seenUrls = new Set();
+  const seenIPs = new Set(); // Для жесткой дедупликации дубликатов серверов
 
   for (const src of ALL_SOURCES) {
     const text = await fetchUrl(src);
@@ -221,6 +222,9 @@ async function main() {
         comment = line.substring(hIdx + 1).trim();
       }
 
+      const ip = extractIP(urlPart);
+      if (!ip || seenIPs.has(ip)) continue; // Если этот IP уже обрабатывался — пропускаем его спам-копии
+
       let sni = '';
       const sniMatch = line.match(/[?&]sni=([^&]+)/);
       if (sniMatch) {
@@ -235,13 +239,11 @@ async function main() {
       let label = '';
       const flags = extractFlags(comment);
 
-      // Здесь убрали квадратные скобки из строк шаблона
       if (sni && isWhitelistedSNI(sni)) {
         isGood = true;
         label = `${flags} SNI: ${sni}`; 
       } else {
-        const ip = extractIP(urlPart);
-        if (ip && isWhitelistedIP(ip)) {
+        if (isWhitelistedIP(ip)) {
           isGood = true;
           label = `${flags} CIDR: ${ip}`;
         }
@@ -249,6 +251,7 @@ async function main() {
 
       if (isGood) {
         seenUrls.add(line);
+        seenIPs.add(ip); // Запоминаем уникальный IP
         rawConfigs.push({ urlPart, label, sni });
         if (rawConfigs.length >= MAX_CONFIGS) break;
       }
@@ -256,7 +259,7 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Фильтр пройден: ${rawConfigs.length} шт. Измеряем скорость TLS-ответа...`);
+  console.log(`📥 Уникальных серверов отобрано: ${rawConfigs.length} шт. Запускаем жесткий тест скорости (до 250мс)...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -282,10 +285,10 @@ async function main() {
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
-  console.log(`✅ Чек окончен! Быстрых серверов найдено: ${liveConfigs.length}`);
+  console.log(`✅ Чек окончен! Высокоскоростных серверов найдено: ${liveConfigs.length}`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 Оптимизированный чек | Живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
+  const header = `#profile-title: Obhod WBL GitHub\n#profile-update-interval: 6\n#announce: 👑 Элитные прокси | Уникальных: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
   console.log('💾 Файл configs.txt успешно сохранен!');
