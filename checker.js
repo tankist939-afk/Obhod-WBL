@@ -85,7 +85,6 @@ const ALL_SOURCES = [
   "https://free-obwl.vercel.app/configs/configs.txt", 
   "https://mifa.world/vless",
   "https://mifa.world/other",
- 
 ];
 
 for (let i = 2; i <= 26; i++) {
