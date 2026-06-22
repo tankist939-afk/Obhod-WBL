@@ -53,6 +53,12 @@ const ALLOWED_CIDRS = [
 ];
 
 const ALL_SOURCES = [
+  "https://raw.githubusercontent.com/Ai123999/5Frid/refs/heads/main/5Frid_Notorgamers",
+  "https://yax.nenadoblokirowatgnidda.ru/exec?url=http%3A%2F%2F77.110.104.181%3A5002%2Fsub%2FVGdydXNzaWEsMTc4MTc4OTk1Mw20zr9u72oH",
+  "https://kfwl-sub.vercel.app/sub",
+  "https://hub.mos.ru/kfwl/sub/raw/main/sub.txt",
+  "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt",
+  "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/ХЕРЗНАЕТЧО",
   "https://github.com/ksenkovsolo/HardVPN-bypass-WhiteLists-/raw/refs/heads/main/vpn-lte/WHITELIST-ALL.txt",
   "https://raw.githubusercontent.com/modrinthmodification-create/ownedvpn/main/subscription.txt",
   "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/refs/heads/main/checked/RU_Best/ru_white_all_WHITE.txt",
