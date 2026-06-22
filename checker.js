@@ -61,7 +61,7 @@ const ALL_SOURCES = [
   "https://raw.githubusercontent.com/prominbro/sub/refs/heads/main/212.txt",
   "https://raw.githubusercontent.com/prominbro/KfWL/refs/heads/main/KfWL.txt",
   "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/merged.txt",
-  "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/wl.txt".
+  "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/wl.txt",
   "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/selected.txt",
   "https://happ.dska.su/https://sub.vpnul.codes/tatrDZhHJPj4NwbT",
   "https://raw.githubusercontent.com/po5p/TgBot/main/1c89ecb2_Subscription.txt",
