@@ -53,6 +53,22 @@ const ALLOWED_CIDRS = [
 ];
 
 const ALL_SOURCES = [
+  "https://github.com/ksenkovsolo/HardVPN-bypass-WhiteLists-/raw/refs/heads/main/vpn-lte/WHITELIST-ALL.txt",
+  "https://raw.githubusercontent.com/modrinthmodification-create/ownedvpn/main/subscription.txt",
+  "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/refs/heads/main/checked/RU_Best/ru_white_all_WHITE.txt",
+  "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_all_WHITE.txt",
+  "https://raw.githubusercontent.com/Ilyacom4ik/free-v2ray-2026/main/subscriptions/FreeCFGHub1.txt",
+  "https://raw.githubusercontent.com/ShadowException/VPN/refs/heads/main/configs/VPN-cat",
+  "https://sub.pfvpn.cfd/free/sub",
+  "https://raw.githubusercontent.com/flaafix/AetrisVPN-white-list-lite/refs/heads/main/AetrisVPN.txt",
+  "https://vpn.zotus.ru/sub.php",
+  "https://raw.githubusercontent.com/sch2kw4r/sch2VPN/refs/heads/main/sch2VPN",
+  "https://alley.serv00.net/youtube",
+  "https://rostunnel.vercel.app/mega.txt",
+  "https://raw.githubusercontent.com/luxxuria/harvester/refs/heads/main/non_ru.txt",
+  "https://gitflic.ru/project/sigil/my-new-cool-project/blob/raw?file=whitelist",
+  "https://raw.githubusercontent.com/dequar/deqwl/refs/heads/main/deray.txt",
+  "https://raw.githubusercontent.com/AirLinkVPN1/AirLinkVPN/refs/heads/main/rkn_white_list",
   "https://raw.githubusercontent.com/btsk161/Freeinternet_byMygalaru.github.io/refs/heads/main/premium.txt",
   "https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/vless.txt",
   "https://internet-tenshi.kangel.tech/whitelist2",
