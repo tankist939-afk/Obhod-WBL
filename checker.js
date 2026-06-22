@@ -53,6 +53,15 @@ const ALLOWED_CIDRS = [
 ];
 
 const ALL_SOURCES = [
+  "https://raw.githubusercontent.com/btsk161/Freeinternet_byMygalaru.github.io/refs/heads/main/premium.txt",
+  "https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/vless.txt",
+  "https://internet-tenshi.kangel.tech/whitelist2",
+  "https://raw.githubusercontent.com/ewecrow78-gif/whitelist1/main/list.txt",
+  "https://raw.githubusercontent.com/whoahaow/rjsxrd/refs/heads/main/githubmirror/bypass/bypass-all.txt",
+  "https://raw.githubusercontent.com/RKPchannel/RKP_bypass_configs/refs/heads/main/whitelist.txt",
+  "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt",
+  "https://gist.github.com/DestroyST6767/f4dd6f12e5ba9d04ff8d19db0396e310.txt",
+  "https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/LimeVPN.txt?v=1",
   "https://mifa.world/turbo",
   "https://titandarkness.mooo.com/UufFgrEom4/first",
   "https://gist.githubusercontent.com/j80547013-max/7fb678a5c5c61b6f7457035ab99924ab/raw/41affa80c57aefdbf6e66cab47896f75d91c9aae/gistfile1.txt",
