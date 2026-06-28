@@ -126,12 +126,26 @@ function extractConfigsFromText(text) {
   return list;
 }
 
-// Функция извлечения Юникод-флагов стран
-function extractFlags(text) {
-  if (!text) return '';
+// Умная функция извлечения флагов с поддержкой URL-декодирования
+function extractFlagsAndIcons(rawComment) {
+  if (!rawComment) return '🌐';
+  
+  let decoded = rawComment;
+  try {
+    // Декодируем %F0%9F%87%B7%F0%9F%87%BA обратно в живые эмодзи
+    decoded = decodeURIComponent(rawComment);
+  } catch (e) {}
+
+  // Ищем чистые юникод-эмодзи флагов стран
   const flagRegex = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/g;
-  const matches = text.match(flagRegex);
-  return matches ? matches.join('') : ''; 
+  const matches = decoded.match(flagRegex);
+  if (matches) return matches.join('');
+
+  // Если флага нет, но в начале комментария стоят другие эмодзи или значки (например 🚀, ⚡, 💎), забираем их
+  const cleanStart = decoded.trim().substring(0, 3).trim();
+  if (cleanStart) return cleanStart;
+
+  return '🌐'; 
 }
 
 function fetchTextWithHeaders(url, headers = {}) {
@@ -185,7 +199,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт чекера с оригинальным переименованием [флаг | сни | Obhod WBL]...`);
+  console.log(`🚀 Старт чекера с декодированием флагов [флаг | сни | Obhod WBL]...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -223,12 +237,11 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // ВОЗВРАТ ТВОЕЙ ИЗНАЧАЛЬНОЙ СТРУКТУРЫ ИМЕНИ: флаг | сни | Obhod WBL
-      const flag = extractFlags(comment);
-      const currentFlag = flag ? `${flag} ` : '🌐 ';
+      // СБОРКА ТВОЕЙ МЕТКИ: флаг | сни | Obhod WBL
+      const flagIcon = extractFlagsAndIcons(comment);
       const currentSni = sni ? sni : hostOrIp;
       
-      let label = `${currentFlag}| ${currentSni} | Obhod WBL`;
+      let label = `${flagIcon} | ${currentSni} | Obhod WBL`;
 
       seenUrls.add(line);
       seenServers.add(serverKey); 
