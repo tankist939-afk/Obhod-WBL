@@ -7,6 +7,9 @@ const MAX_CONFIGS = 6000;      // Лимит собираемых уникаль
 const PARALLEL_LIMIT = 50;     // Количество одновременных тестов
 const MAX_PING = 900;          // Оптимальный таймаут (в мс)
 
+// Кэш для флагов, чтобы не опрашивать один и тот же IP по сто раз
+const ipGeoCache = new Map();
+
 // ======================== СТАБИЛЬНЫЙ СПИСОК ЖИВЫХ ИСТОЧНИКОВ ========================
 async function discoverSources() {
   console.log("📥 Загрузка проверенной базы репозиториев (Raw-ссылки)...");
@@ -75,31 +78,25 @@ async function discoverSources() {
     "https://mifa.world/other"
   ]);
 
-  // Зеркала goida-vpn-configs (с 2 по 26)
   for (let i = 2; i <= 26; i++) {
     sources.add(`https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/${i}.txt`);
   }
 
-  // Telegram-каналы
   const tgChannels = ['vless_configs', 'free_vless_vpn', 'vpn_reality', 'vless_reality_ru'];
   for (const channel of tgChannels) {
     sources.add(`https://t.me/s/${channel}`);
   }
 
-  console.log(`📡 База загружена. Всего источников для выкачивания: ${sources.size}`);
   return Array.from(sources);
 }
 
 // ======================== КОМБИНИРОВАННЫЙ ЭКСТРАКТОР ========================
 function extractConfigsFromText(text) {
   const list = [];
-  
-  // 1. Сбор готовых ссылок (vless://, trojan://)
   const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`]+/g;
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
 
-  // 2. Сбор из голых параметров серверов
   const ipPortRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]{2,5})/g;
   const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   const pbkRegex = /pbk=([a-zA-Z0-9_-]+)/;
@@ -109,7 +106,6 @@ function extractConfigsFromText(text) {
   while ((match = ipPortRegex.exec(text)) !== null) {
     const ip = match[1];
     const port = match[2];
-    
     const context = text.substring(Math.max(0, match.index - 250), Math.min(text.length, match.index + 400));
     const uuidMatch = context.match(uuidRegex);
     
@@ -117,22 +113,58 @@ function extractConfigsFromText(text) {
       const uuid = uuidMatch[0];
       const pbk = context.match(pbkRegex)?.[1] || '';
       const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru';
-      
-      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🌐 | ${sni} | Obhod WBL`;
-      list.push(generatedVless);
+      list.push(`vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🌐 | ${sni} | Obhod WBL`);
     }
   }
-
   return list;
 }
 
-// Твоя оригинальная функция из самого первого скрипта
+// Извлечение флагов из текста оригинального комментария
 function extractFlags(text) {
-  if (!text) return '🌐';
-  try { text = decodeURIComponent(text); } catch(e) {} // Декодируем на случай %F0%9F...
+  if (!text) return '';
+  try { text = decodeURIComponent(text); } catch(e) {}
   const flagRegex = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/g;
   const matches = text.match(flagRegex);
-  return matches ? matches.join('') : '🌐';
+  return matches ? matches.join('') : '';
+}
+
+// Преобразование двухбуквенного кода страны (RU, DE) в Юникод-эмодзи флага
+function getFlagEmoji(countryCode) {
+  if (!countryCode || countryCode.length !== 2) return '🌐';
+  const codePoints = countryCode
+    .toUpperCase()
+    .split('')
+    .map(char =>  127397 + char.charCodeAt(0));
+  return String.fromCodePoint(...codePoints);
+}
+
+// Быстрый запрос геопозиции IP без сторонних библиотек
+function getCountryByIp(ip) {
+  if (ipGeoCache.has(ip)) return Promise.resolve(ipGeoCache.get(ip));
+  
+  return new Promise((resolve) => {
+    // Используем экономный эндпоинт ip-api (без лишних полей, только countryCode)
+    const url = `https://demo.ip-api.com/json/${ip}?fields=status,countryCode`;
+    
+    const req = https.get(url, { timeout: 1500, headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      let raw = '';
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(raw);
+          if (json.status === 'success' && json.countryCode) {
+            const flag = getFlagEmoji(json.countryCode);
+            ipGeoCache.set(ip, flag);
+            return resolve(flag);
+          }
+        } catch (e) {}
+        resolve('🌐');
+      });
+    });
+    
+    req.on('error', () => resolve('🌐'));
+    req.on('timeout', () => { req.destroy(); resolve('🌐'); });
+  });
 }
 
 function fetchTextWithHeaders(url, headers = {}) {
@@ -186,7 +218,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт чекера с оригинальным переименованием...`);
+  console.log(`🚀 Старт чекера с точным гео-определением по IP...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -220,25 +252,25 @@ async function main() {
         try { sni = decodeURIComponent(sniMatch[1]); } catch (e) { sni = sniMatch[1]; }
       }
 
-      // Дедупликация (IP + ПОРТ + SNI)
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // ОРИГИНАЛЬНОЕ ТВОЕ ПЕРЕИМЕНОВАНИЕ ИЗ САМОЙ ПЕРВОЙ ВЕРСИИ
-      const flags = extractFlags(comment);
-      const currentSni = sni ? sni : hostOrIp;
-      let label = `${flags} | ${currentSni} | Obhod WBL`;
+      // Первичный поиск флага из коммента (если там спам-пачка, режем до одного)
+      let parsedFlag = extractFlags(comment);
+      if (parsedFlag && parsedFlag.length > 4) {
+        parsedFlag = parsedFlag.substring(0, 4);
+      }
 
       seenUrls.add(line);
       seenServers.add(serverKey); 
-      rawConfigs.push({ urlPart, label, sni });
+      rawConfigs.push({ urlPart, hostOrIp, port, sni, parsedFlag });
 
       if (rawConfigs.length >= MAX_CONFIGS) break;
     }
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Тестируем скорость...`);
+  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Тестируем скорость и определяем реальные локации...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -249,12 +281,25 @@ async function main() {
       const cfg = rawConfigs[currentIdx];
       if (!cfg) continue;
 
-      let m = cfg.urlPart.match(/@([^:]+):([0-9]+)/) || cfg.urlPart.match(/:\/\/([^:]+):([0-9]+)/);
-      if (m) {
-        const alive = await checkTlsWithPing(m[1], m[2], cfg.sni);
-        if (alive) {
-          liveConfigs.push(`${cfg.urlPart}#${cfg.label}`);
+      const alive = await checkTlsWithPing(cfg.hostOrIp, cfg.port, cfg.sni);
+      if (alive) {
+        let finalFlag = cfg.parsedFlag;
+        
+        // Твоя задумка: если флага в комменте не было (или это голый IP), определяем страну ЖЕСТКО ПО IP-адресу сервера
+        if (!finalFlag) {
+          // Если хост — домен, а не IP, резолвить его не будем ради скорости, просто чекнем регуляркой
+          const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
+          if (isIp) {
+            finalFlag = await getCountryByIp(cfg.hostOrIp);
+          } else {
+            finalFlag = '🌐';
+          }
         }
+
+        const currentSni = cfg.sni ? cfg.sni : cfg.hostOrIp;
+        const label = `${finalFlag} | ${currentSni} | Obhod WBL`;
+        
+        liveConfigs.push(`${cfg.urlPart}#${label}`);
       }
     }
   }
