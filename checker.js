@@ -118,7 +118,8 @@ function extractConfigsFromText(text) {
       const pbk = context.match(pbkRegex)?.[1] || '';
       const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru';
       
-      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🌐 Obhod WBL`;
+      // Для реконструированных серверов по умолчанию ставим пустую метку без принудительной планеты
+      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#Obhod WBL`;
       list.push(generatedVless);
     }
   }
@@ -126,12 +127,12 @@ function extractConfigsFromText(text) {
   return list;
 }
 
-// ======================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ========================
+// Улучшенный сборщик флагов: ищет исключительно Unicode-символы флагов стран
 function extractFlags(text) {
-  if (!text) return '🌐';
+  if (!text) return '';
   const flagRegex = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/g;
   const matches = text.match(flagRegex);
-  return matches ? matches.join('') : '🌐';
+  return matches ? matches.join('') : ''; // Если флага нет, возвращаем пустоту, а не планету
 }
 
 function fetchTextWithHeaders(url, headers = {}) {
@@ -223,9 +224,10 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // ИЗНАЧАЛЬНОЕ ОРИГИНАЛЬНОЕ ПЕРЕИМЕНОВАНИЕ
-      const flags = extractFlags(comment);
-      let label = `${flags} | Obhod WBL`; // То самое оригинальное название
+      // ОРИГИНАЛЬНАЯ ЛОГИКА ИМЕНИ:
+      const flag = extractFlags(comment);
+      // Если в оригинальном комментарии был флаг, склеиваем его, иначе пишем просто чистое имя
+      let label = flag ? `${flag} | Obhod WBL` : `Obhod WBL`;
 
       seenUrls.add(line);
       seenServers.add(serverKey); 
