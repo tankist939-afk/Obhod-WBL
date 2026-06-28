@@ -3,92 +3,104 @@ const https = require('https');
 const tls = require('tls');
 
 // ======================== НАСТРОЙКИ ========================
-const MAX_CONFIGS = 6000;      // Больше лимит, так как парсинг стал глубже
+const MAX_CONFIGS = 6000;      // Лимит собираемых уникальных объектов
 const PARALLEL_LIMIT = 50;     // Количество одновременных тестов
-const MAX_PING = 850;          // Оптимальный таймаут (в мс)
+const MAX_PING = 900;          // Оптимальный таймаут (в мс)
 
-// ======================== АВТОНОМНЫЙ ИСТОЧНИК ПОИСКА ========================
+// ======================== СТАБИЛЬНЫЙ СПИСОК ЖИВЫХ ИСТОЧНИКОВ ========================
 async function discoverSources() {
-  console.log("🔍 Запуск тотального автопоиска по всему интернету...");
+  console.log("📥 Загрузка проверенной базы репозиториев (Raw-ссылки)...");
+  
+  // Твой оригинальный список, который давал 3500+ конфигов
   const sources = new Set([
-    // Оставляем только 4 базовых глобальных агрегатора (остальное ищется динамически)
+    "https://raw.githubusercontent.com/Ai123999/5Frid/refs/heads/main/5Frid_Notorgamers",
+    "https://yax.nenadoblokirowatgnidda.ru/exec?url=http%3A%2F%2F77.110.104.181%3A5002%2Fsub%2FVGdydXNzaWEsMTc4MTc4OTk1Mw20zr9u72oH",
+    "https://kfwl-sub.vercel.app/sub",
     "https://hub.mos.ru/kfwl/sub/raw/main/sub.txt",
     "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt",
-    "https://kfwl-sub.vercel.app/sub",
-    "https://free-obwl.vercel.app/configs/configs.txt"
+    "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/ХЕРЗНАЕТЧО",
+    "https://github.com/ksenkovsolo/HardVPN-bypass-WhiteLists-/raw/refs/heads/main/vpn-lte/WHITELIST-ALL.txt",
+    "https://raw.githubusercontent.com/modrinthmodification-create/ownedvpn/main/subscription.txt",
+    "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/refs/heads/main/checked/RU_Best/ru_white_all_WHITE.txt",
+    "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_all_WHITE.txt",
+    "https://raw.githubusercontent.com/Ilyacom4ik/free-v2ray-2026/main/subscriptions/FreeCFGHub1.txt",
+    "https://raw.githubusercontent.com/ShadowException/VPN/refs/heads/main/configs/VPN-cat",
+    "https://sub.pfvpn.cfd/free/sub",
+    "https://raw.githubusercontent.com/flaafix/AetrisVPN-white-list-lite/refs/heads/main/AetrisVPN.txt",
+    "https://vpn.zotus.ru/sub.php",
+    "https://raw.githubusercontent.com/sch2kw4r/sch2VPN/refs/heads/main/sch2VPN",
+    "https://alley.serv00.net/youtube",
+    "https://rostunnel.vercel.app/mega.txt",
+    "https://raw.githubusercontent.com/luxxuria/harvester/refs/heads/main/non_ru.txt",
+    "https://gitflic.ru/project/sigil/my-new-cool-project/blob/raw?file=whitelist",
+    "https://raw.githubusercontent.com/dequar/deqwl/refs/heads/main/deray.txt",
+    "https://raw.githubusercontent.com/AirLinkVPN1/AirLinkVPN/refs/heads/main/rkn_white_list",
+    "https://raw.githubusercontent.com/btsk161/Freeinternet_byMygalaru.github.io/refs/heads/main/premium.txt",
+    "https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/vless.txt",
+    "https://internet-tenshi.kangel.tech/whitelist2",
+    "https://raw.githubusercontent.com/ewecrow78-gif/whitelist1/main/list.txt",
+    "https://raw.githubusercontent.com/whoahaow/rjsxrd/refs/heads/main/githubmirror/bypass/bypass-all.txt",
+    "https://raw.githubusercontent.com/RKPchannel/RKP_bypass_configs/refs/heads/main/whitelist.txt",
+    "https://gist.github.com/DestroyST6767/f4dd6f12e5ba9d04ff8d19db0396e310.txt",
+    "https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/LimeVPN.txt?v=1",
+    "https://mifa.world/turbo",
+    "https://titandarkness.mooo.com/UufFgrEom4/first",
+    "https://gist.githubusercontent.com/j80547013-max/7fb678a5c5c61b6f7457035ab99924ab/raw/41affa80c57aefdbf6e66cab47896f75d91c9aae/gistfile1.txt",
+    "https://sub.accessbyme.com/sub/c6710e96370b4c47bae7a6829d4b2b67?fmt=v2b64",
+    "https://raw.githubusercontent.com/prominbro/sub/refs/heads/main/212.txt",
+    "https://raw.githubusercontent.com/prominbro/KfWL/refs/heads/main/KfWL.txt",
+    "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/merged.txt",
+    "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/wl.txt",
+    "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/selected.txt",
+    "https://happ.dska.su/https://sub.vpnul.codes/tatrDZhHJPj4NwbT",
+    "https://raw.githubusercontent.com/po5p/TgBot/main/1c89ecb2_Subscription.txt",
+    "https://bosttt.duckdns.org:2096/sfuhiuweon24newf/bbc0y4xy195i4loyefwwe3",
+    "https://oplatasite.ru/sub/dXNlcl8xODk1NTYwMTgzLDE3ODE5NjEwNzUGBz7FKJurd",
+    "https://gist.githubusercontent.com/HalyavusVPNUS/a93def732d3c624029c09c393dd0772e/raw/f4d140f55fc4831652673693f5fe74fc483b762e/%25D0%25BA%25D0%25BE%25D0%25BD%25D1%2584%25D0%25B8%25D0%25B3%25D0%25B8",
+    "https://sub.savvka.fun/whitelist",
+    "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/WildVFmini",
+    "https://raw.githubusercontent.com/WSJuJuB01/WS_Parser/refs/heads/main/subscription.txt",
+    "https://gitverse.ru/api/repos/Catlerok_glasha/catwhiteMIRROR/raw/branch/master/configs.txt",
+    "https://gitverse.ru/api/repos/cid-uscoritel/cid-catwhite-uscoritel/raw/branch/master/configs.txt",
+    "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
+    "https://mifa.world/vmess",
+    "https://mifa.world/trojan",
+    "https://mifa.world/hysteria", 
+    "https://mifa.world/ss",
+    "https://free-obwl.vercel.app/configs/configs.txt", 
+    "https://mifa.world/vless",
+    "https://mifa.world/other"
   ]);
 
-  // Глубокий поиск по GitHub API
-  const token = process.env.GITHUB_TOKEN;
-  if (token) {
-    const ghQueries = [
-      'vless://', 'trojan://', 'reality publickey', 
-      'serverName reality', 'flow: xtls-rprx-vision'
-    ];
-    for (const query of ghQueries) {
-      try {
-        const url = `https://api.github.com/search/code?q=${encodeURIComponent(query)}&per_page=100`;
-        const res = await fetchTextWithHeaders(url, {
-          'User-Agent': 'NodeJS-Autonomous-Parser',
-          'Authorization': `token ${token}`,
-          'Accept': 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28'
-        });
-        if (res) {
-          const json = JSON.parse(res);
-          if (json.items) {
-            json.items.forEach(item => {
-              const rawUrl = item.html_url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/');
-              sources.add(rawUrl);
-            });
-          }
-        }
-      } catch (e) {}
-    }
+  // Твой цикл генерации репозиториев (зеркала с 2 по 26) — именно он давал основную массу!
+  for (let i = 2; i <= 26; i++) {
+    sources.add(`https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/${i}.txt`);
   }
 
-  // Поиск по GitVerse API
-  try {
-    const url = `https://gitverse.ru/api/v1/repos/search?q=vless&limit=40`;
-    const res = await fetchTextWithHeaders(url, { 'User-Agent': 'NodeJS-Autonomous-Parser' });
-    if (res) {
-      const json = JSON.parse(res);
-      if (json.data) {
-        json.data.forEach(repo => {
-          ['master', 'main'].forEach(b => {
-            sources.add(`https://gitverse.ru/api/repos/${repo.full_name}/raw/branch/${b}/configs.txt`);
-            sources.add(`https://gitverse.ru/api/repos/${repo.full_name}/raw/branch/${b}/sub.txt`);
-            sources.add(`https://gitverse.ru/api/repos/${repo.full_name}/raw/branch/${b}/merged.txt`);
-          });
-        });
-      }
-    }
-  } catch (e) {}
-
-  // Telegram-каналы (добавил самые жирные по конфигурациям)
-  const tgChannels = [
-    'vless_configs', 'free_vless_vpn', 'vpn_reality', 'vless_reality_ru',
-    'vless_sub', 'free_vless_ru', 'shadowsocks_vless', 'bypas_rkn'
-  ];
+  // Telegram-каналы (в дополнение для свежести)
+  const tgChannels = ['vless_configs', 'free_vless_vpn', 'vpn_reality', 'vless_reality_ru'];
   for (const channel of tgChannels) {
     sources.add(`https://t.me/s/${channel}`);
   }
 
-  console.log(`📡 Поиск завершен. Найдено уникальных целевых источников: ${sources.size}`);
+  console.log(`📡 База загружена. Всего источников для выкачивания: ${sources.size}`);
   return Array.from(sources);
 }
 
-// ======================== УМНЫЙ СБОРЩИК (ССЫЛКИ + ОТДЕЛЬНЫЕ СЕРВЕРА) ========================
+// ======================== КОМБИНИРОВАННЫЙ ЭКСТРАКТОР ========================
 function extractConfigsFromText(text) {
   const list = [];
   
-  // 1. Сбор стандартных готовых ссылок
+  // 1. Сбор готовых ссылок (vless://, trojan://)
   const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`]+/g;
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
 
-  // 2. Сбор из "голых" параметров (парсинг отдельных разрозненных серверов)
-  // Ищем комбинации IP:PORT, UUID/Паролей и Reality параметров в тексте
+  // 2. Сбор из голых параметров серверов (если раскиданы текстом)
   const ipPortRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]{2,5})/g;
   const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   const pbkRegex = /pbk=([a-zA-Z0-9_-]+)/;
@@ -99,17 +111,15 @@ function extractConfigsFromText(text) {
     const ip = match[1];
     const port = match[2];
     
-    // Берем небольшой контекст вокруг найденного IP, чтобы вытащить ключи
-    const context = text.substring(Math.max(0, match.index - 300), Math.min(text.length, match.index + 500));
-    
+    const context = text.substring(Math.max(0, match.index - 250), Math.min(text.length, match.index + 400));
     const uuidMatch = context.match(uuidRegex);
+    
     if (uuidMatch) {
       const uuid = uuidMatch[0];
       const pbk = context.match(pbkRegex)?.[1] || '';
-      const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru'; // дефолт-заглушка если не найден
+      const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru';
       
-      // Собираем полноценную vless ссылку из отдельных кусков!
-      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🤖 Reconstructed Node`;
+      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🤖 Reconstructed`;
       list.push(generatedVless);
     }
   }
@@ -127,7 +137,7 @@ function extractFlags(text) {
 
 function fetchTextWithHeaders(url, headers = {}) {
   return new Promise((resolve) => {
-    https.get(url, { headers, timeout: 5000 }, (res) => {
+    https.get(url, { headers, timeout: 6000 }, (res) => {
       let data = '';
       if (res.statusCode !== 200) return resolve('');
       res.on('data', chunk => data += chunk);
@@ -176,7 +186,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Запуск умного автономного парсера...`);
+  console.log(`🚀 Старт восстановленного комбайна...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -187,7 +197,7 @@ async function main() {
     let text = await fetchTextWithHeaders(src, { 'User-Agent': 'Mozilla/5.0' });
     if (!text) continue;
 
-    // Сбор комбинированным методом (и ссылки, и разрозненные сервера)
+    // Парсим обоими методами: и готовые ссылки, и разбитые сервера
     const matches = extractConfigsFromText(text);
     
     for (let line of matches) {
@@ -211,10 +221,11 @@ async function main() {
         try { sni = decodeURIComponent(sniMatch[1]); } catch (e) { sni = sniMatch[1]; }
       }
 
-      // Глубокая дедупликация (IP + Порт + SNI)
+      // Дедупликация (IP + ПОРТ + SNI)
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
+      // Старое оригинальное переименование
       const flags = extractFlags(comment);
       let label = sni ? `${flags} SNI: ${sni}` : `${flags} IP: ${hostOrIp}`;
 
@@ -227,7 +238,7 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Извлечено уникальных объектов: ${rawConfigs.length}. Запуск скоростных тестов...`);
+  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Тестируем скорость...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -251,13 +262,13 @@ async function main() {
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
-  console.log(`✅ Проверку прошли: ${liveConfigs.length} серверов.`);
+  console.log(`✅ Готово! Проверку прошли: ${liveConfigs.length} серверов.`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL AI Engine\n#profile-update-interval: 1\n#announce: 🤖 Полная автономия | Ссылки + Сборка серверов | Живых: ${liveConfigs.length} | ${timestamp} UTC\n\n`;
+  const header = `#profile-title: Obhod WBL Hybrid Cleaner\n#profile-update-interval: 1\n#announce: 👑 Комбинированная база | Живых: ${liveConfigs.length} | ${timestamp} UTC\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
-  console.log('💾 configs.txt обновлен автоматически!');
+  console.log('💾 configs.txt успешно сохранен!');
 }
 
 main();
