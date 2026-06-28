@@ -118,7 +118,6 @@ function extractConfigsFromText(text) {
       const pbk = context.match(pbkRegex)?.[1] || '';
       const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru';
       
-      // Для реконструированных серверов по умолчанию ставим пустую метку без принудительной планеты
       let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#Obhod WBL`;
       list.push(generatedVless);
     }
@@ -127,12 +126,12 @@ function extractConfigsFromText(text) {
   return list;
 }
 
-// Улучшенный сборщик флагов: ищет исключительно Unicode-символы флагов стран
+// Функция извлечения Юникод-флагов стран
 function extractFlags(text) {
   if (!text) return '';
   const flagRegex = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/g;
   const matches = text.match(flagRegex);
-  return matches ? matches.join('') : ''; // Если флага нет, возвращаем пустоту, а не планету
+  return matches ? matches.join('') : ''; 
 }
 
 function fetchTextWithHeaders(url, headers = {}) {
@@ -186,7 +185,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт чекера с оригинальным переименованием...`);
+  console.log(`🚀 Старт чекера с оригинальным переименованием [флаг | сни | Obhod WBL]...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -224,10 +223,12 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // ОРИГИНАЛЬНАЯ ЛОГИКА ИМЕНИ:
+      // ВОЗВРАТ ТВОЕЙ ИЗНАЧАЛЬНОЙ СТРУКТУРЫ ИМЕНИ: флаг | сни | Obhod WBL
       const flag = extractFlags(comment);
-      // Если в оригинальном комментарии был флаг, склеиваем его, иначе пишем просто чистое имя
-      let label = flag ? `${flag} | Obhod WBL` : `Obhod WBL`;
+      const currentFlag = flag ? `${flag} ` : '🌐 ';
+      const currentSni = sni ? sni : hostOrIp;
+      
+      let label = `${currentFlag}| ${currentSni} | Obhod WBL`;
 
       seenUrls.add(line);
       seenServers.add(serverKey); 
