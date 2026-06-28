@@ -54,22 +54,27 @@ const ALLOWED_CIDRS = [
 
 // ======================== ГЛОБАЛЬНЫЙ АВТОПОИСК ========================
 async function discoverSources() {
-  console.log("🔍 Запуск глобального поиска источников по всему интернету...");
+  console.log("🔍 Запуск расширенного поиска по всему интернету...");
   const sources = new Set([
+    // Железные базовые источники (твои старые, гарантированно рабочие)
     "https://hub.mos.ru/kfwl/sub/raw/main/sub.txt",
-    "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt"
+    "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt",
+    "https://raw.githubusercontent.com/Ai123999/5Frid/refs/heads/main/5Frid_Notorgamers",
+    "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/refs/heads/main/checked/RU_Best/ru_white_all_WHITE.txt"
   ]);
 
-  // 1. Поиск по всему GitHub (через GitHub API)
+  // 1. Поиск по GitHub API (С исправленными заголовками и расширенными ключевыми словами)
   const token = process.env.GITHUB_TOKEN;
   if (token) {
-    const ghQueries = ['vless://+path:/.txt$/', 'trojan://+path:/.txt$/', 'vless+reality+whitelist'];
+    const ghQueries = ['vless reality ru', 'vless whitelist', 'trojan reality whitelist'];
     for (const query of ghQueries) {
       try {
-        const url = `https://api.github.com/search/code?q=${encodeURIComponent(query)}&per_page=100`;
+        const url = `https://api.github.com/search/code?q=${encodeURIComponent(query)}&per_page=50`;
         const res = await fetchTextWithHeaders(url, {
           'User-Agent': 'NodeJS-Config-Harvester',
-          'Authorization': `token ${token}`
+          'Authorization': `token ${token}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28' // Важная строка для обхода багов API гитхаба
         });
         if (res) {
           const json = JSON.parse(res);
@@ -80,44 +85,43 @@ async function discoverSources() {
             });
           }
         }
-      } catch (e) { console.log(`⚠️ Ошибка поиска GitHub API: ${e.message}`); }
+      } catch (e) { console.log(`⚠️ Ошибка GitHub API: ${e.message}`); }
     }
-  } else {
-    console.log("⚠️ GITHUB_TOKEN не найден. Глобальный поиск по GitHub пропущен.");
   }
 
-  // 2. Поиск по всему GitVerse (через GitVerse API)
-  const gvQueries = ['vless', 'trojan', 'whitelist'];
+  // 2. Поиск по GitVerse API (Проверяем и main, и master ветки)
+  const gvQueries = ['vless', 'whitelist'];
   for (const q of gvQueries) {
     try {
-      const url = `https://gitverse.ru/api/v1/repos/search?q=${encodeURIComponent(q)}&limit=50`;
+      const url = `https://gitverse.ru/api/v1/repos/search?q=${encodeURIComponent(q)}&limit=30`;
       const res = await fetchTextWithHeaders(url, { 'User-Agent': 'NodeJS-Config-Harvester' });
       if (res) {
         const json = JSON.parse(res);
         if (json.data && Array.isArray(json.data)) {
           json.data.forEach(repo => {
-            const baseRaw = `https://gitverse.ru/api/repos/${repo.full_name}/raw/branch/master`;
-            sources.add(`${baseRaw}/configs.txt`);
-            sources.add(`${baseRaw}/whitelist.txt`);
-            sources.add(`${baseRaw}/sub.txt`);
-            sources.add(`${baseRaw}/merged.txt`);
+            ['master', 'main'].forEach(branch => {
+              const baseRaw = `https://gitverse.ru/api/repos/${repo.full_name}/raw/branch/${branch}`;
+              sources.add(`${baseRaw}/configs.txt`);
+              sources.add(`${baseRaw}/whitelist.txt`);
+              sources.add(`${baseRaw}/sub.txt`);
+            });
           });
         }
       }
-    } catch (e) { console.log(`⚠️ Ошибка поиска GitVerse API: ${e.message}`); }
+    } catch (e) { console.log(`⚠️ Ошибка GitVerse API: ${e.message}`); }
   }
 
-  // 3. Сбор с Telegram-каналов (Веб-превью)
+  // 3. Расширенный список Telegram-каналов
   const tgChannels = [
     'vless_configs', 'free_vless_vpn', 'vpn_reality', 
     'vless_trojan_shadowsocks', 'free_configs_vless', 'shadowsocks_vless',
-    'bypas_rkn', 'VP_N_Free', 'vless_reality_ru'
+    'bypas_rkn', 'VP_N_Free', 'vless_reality_ru', 'vless_sub', 'free_vless_ru'
   ];
   for (const channel of tgChannels) {
     sources.add(`https://t.me/s/${channel}`);
   }
 
-  console.log(`📡 Автопоиск завершен. Всего потенциальных адресов для проверки: ${sources.size}`);
+  console.log(`📡 Поиск завершен. Найдено потенциальных источников: ${sources.size}`);
   return Array.from(sources);
 }
 
@@ -174,7 +178,7 @@ function fetchTextWithHeaders(url, headers = {}) {
 }
 
 function fetchUrl(url) {
-  return fetchTextWithHeaders(url, { 'User-Agent': 'Mozilla/5.0 NodeJS' });
+  return fetchTextWithHeaders(url, { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' });
 }
 
 function checkTlsWithPing(host, port, sni) {
@@ -219,12 +223,12 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ОСНОВНОЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Скрипт дедупликации и сбора запущен.`);
+  console.log(`🚀 Начинаем всеядный сбор...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
   const seenUrls = new Set();
-  const seenServers = new Set(); // <--- Трекер уникальных связок IP:PORT:SNI
+  const seenServers = new Set(); 
 
   for (const src of dynamicSources) {
     let text = await fetchUrl(src);
@@ -242,7 +246,7 @@ async function main() {
       }
     }
 
-    // Извлекаем конфиги из любого хаоса
+    // Извлекаем ссылки vless/trojan из любого хаоса
     const configRegex = /(vless|trojan):\/\/[^\s"'\<\>]+/g;
     const matches = text.match(configRegex) || [];
     
@@ -257,7 +261,6 @@ async function main() {
         comment = line.substring(hIdx + 1).trim();
       }
 
-      // Извлекаем порт и хост/IP для глубокой проверки на дубликаты
       let hostMatch = urlPart.match(/@([^:]+):([0-9]+)/) || urlPart.match(/:\/\/([^:]+):([0-9]+)/);
       if (!hostMatch) continue;
       const hostOrIp = hostMatch[1];
@@ -269,11 +272,9 @@ async function main() {
         try { sni = decodeURIComponent(sniMatch[1]); } catch (e) { sni = sniMatch[1]; }
       }
 
-      // ГЛУБОКАЯ ДЕДУПЛИКАЦИЯ: Сверяем уникальный ключ сервера
+      // Проверка на дубликаты
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
-      if (seenServers.has(serverKey)) {
-        continue; // Если такой сервер (IP+Порт+SNI) уже встречался, полностью пропускаем его
-      }
+      if (seenServers.has(serverKey)) continue;
 
       let isGood = false;
       let label = '';
@@ -292,7 +293,7 @@ async function main() {
 
       if (isGood) {
         seenUrls.add(line);
-        seenServers.add(serverKey); // Запоминаем ключ сервера
+        seenServers.add(serverKey); 
         rawConfigs.push({ urlPart, label, sni });
         if (rawConfigs.length >= MAX_CONFIGS) break;
       }
@@ -300,7 +301,7 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Уникальных конфигов прошли фильтр: ${rawConfigs.length} шт. Проверяем TLS...`);
+  console.log(`📥 Успешно отфильтровано уникальных конфигов: ${rawConfigs.length} шт. Проверяем скорость...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -325,10 +326,10 @@ async function main() {
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
-  console.log(`✅ Чек окончен! Уникальных скоростных серверов найдено: ${liveConfigs.length}`);
+  console.log(`✅ Чек окончен! Скоростных серверов найдено: ${liveConfigs.length}`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL Global Explorer\n#profile-update-interval: 6\n#announce: 👑 Глобальный поиск | Уникальных живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
+  const header = `#profile-title: Obhod WBL Global Explorer\n#profile-update-interval: 6\n#announce: 👑 Глобальный поиск | Живых: ${liveConfigs.length} | UTC: ${timestamp}\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
   console.log('💾 Результат успешно записан в файл configs.txt!');
