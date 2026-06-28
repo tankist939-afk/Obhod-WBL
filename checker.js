@@ -7,7 +7,7 @@ const MAX_CONFIGS = 6000;      // Лимит собираемых уникаль
 const PARALLEL_LIMIT = 50;     // Количество одновременных тестов
 const MAX_PING = 900;          // Оптимальный таймаут (в мс)
 
-// Кэш для флагов, чтобы не опрашивать один и тот же IP по сто раз
+// Кэш для гео-данных, чтобы экономить ресурсы
 const ipGeoCache = new Map();
 
 // ======================== СТАБИЛЬНЫЙ СПИСОК ЖИВЫХ ИСТОЧНИКОВ ========================
@@ -119,7 +119,7 @@ function extractConfigsFromText(text) {
   return list;
 }
 
-// Извлечение флагов из текста оригинального комментария
+// Извлечение флагов из комментария
 function extractFlags(text) {
   if (!text) return '';
   try { text = decodeURIComponent(text); } catch(e) {}
@@ -128,42 +128,75 @@ function extractFlags(text) {
   return matches ? matches.join('') : '';
 }
 
-// Преобразование двухбуквенного кода страны (RU, DE) в Юникод-эмодзи флага
+// Преобразование ISO-кода в эмодзи-флаг
 function getFlagEmoji(countryCode) {
   if (!countryCode || countryCode.length !== 2) return '🌐';
   const codePoints = countryCode
     .toUpperCase()
     .split('')
-    .map(char =>  127397 + char.charCodeAt(0));
+    .map(char => 127397 + char.charCodeAt(0));
   return String.fromCodePoint(...codePoints);
 }
 
-// Быстрый запрос геопозиции IP без сторонних библиотек
+// Перевод IP-строки в число для быстрого сравнения подсетей
+function ipToLong(ip) {
+  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+}
+
+// ======================== ОБЪЕДИНЕННАЯ ГЕОЛОКАЦИЯ ========================
 function getCountryByIp(ip) {
   if (ipGeoCache.has(ip)) return Promise.resolve(ipGeoCache.get(ip));
   
+  const ipLong = ipToLong(ip);
+
+  // 1. ЛОКАЛЬНАЯ БАЗА: Моментально ловим самые частые IP-диапазоны ру-серверов
+  const ruRanges = [
+    { start: '5.101.156.0', end: '5.101.159.255' },
+    { start: '31.184.192.0', end: '31.184.255.255' },
+    { start: '45.132.196.0', end: '45.132.199.255' },
+    { start: '77.82.0.0', end: '77.82.255.255' },
+    { start: '80.78.240.0', end: '80.78.255.255' },
+    { start: '91.210.204.0', end: '91.210.207.255' },
+    { start: '94.25.0.0', end: '94.25.255.255' },
+    { start: '109.194.0.0', end: '109.195.255.255' },
+    { start: '176.59.0.0', end: '176.60.255.255' },
+    { start: '178.176.0.0', end: '178.177.255.255' },
+    { start: '185.12.92.0', end: '185.12.95.255' },
+    { start: '188.162.0.0', end: '188.163.255.255' },
+    { start: '213.87.0.0', end: '213.87.255.255' }
+  ];
+
+  for (const r of ruRanges) {
+    if (ipLong >= ipToLong(r.start) && ipLong <= ipToLong(r.end)) {
+      ipGeoCache.set(ip, '🇷🇺');
+      return Promise.resolve('🇷🇺');
+    }
+  }
+
+  // 2. СЕТЕВОЙ ЗАПРОС (с рандомной задержкой от блокировок)
   return new Promise((resolve) => {
-    // Используем экономный эндпоинт ip-api (без лишних полей, только countryCode)
-    const url = `https://demo.ip-api.com/json/${ip}?fields=status,countryCode`;
-    
-    const req = https.get(url, { timeout: 1500, headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
-      let raw = '';
-      res.on('data', chunk => raw += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(raw);
-          if (json.status === 'success' && json.countryCode) {
-            const flag = getFlagEmoji(json.countryCode);
-            ipGeoCache.set(ip, flag);
-            return resolve(flag);
-          }
-        } catch (e) {}
-        resolve('🌐');
+    setTimeout(() => {
+      const url = `https://demo.ip-api.com/json/${ip}?fields=status,countryCode`;
+      
+      const req = https.get(url, { timeout: 1500, headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+        let raw = '';
+        res.on('data', chunk => raw += chunk);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(raw);
+            if (json.status === 'success' && json.countryCode) {
+              const flag = getFlagEmoji(json.countryCode);
+              ipGeoCache.set(ip, flag);
+              return resolve(flag);
+            }
+          } catch (e) {}
+          resolve('🌐');
+        });
       });
-    });
-    
-    req.on('error', () => resolve('🌐'));
-    req.on('timeout', () => { req.destroy(); resolve('🌐'); });
+      
+      req.on('error', () => resolve('🌐'));
+      req.on('timeout', () => { req.destroy(); resolve('🌐'); });
+    }, Math.random() * 2500); 
   });
 }
 
@@ -218,7 +251,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт чекера с точным гео-определением по IP...`);
+  console.log(`🚀 Старт объединенного гибридного чекера...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -255,7 +288,7 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // Первичный поиск флага из коммента (если там спам-пачка, режем до одного)
+      // Читаем флаг из коммента (если спам-пачка, режем до одного флага)
       let parsedFlag = extractFlags(comment);
       if (parsedFlag && parsedFlag.length > 4) {
         parsedFlag = parsedFlag.substring(0, 4);
@@ -270,7 +303,7 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Тестируем скорость и определяем реальные локации...`);
+  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Тестируем скорость и геопозицию...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -285,9 +318,8 @@ async function main() {
       if (alive) {
         let finalFlag = cfg.parsedFlag;
         
-        // Твоя задумка: если флага в комменте не было (или это голый IP), определяем страну ЖЕСТКО ПО IP-адресу сервера
-        if (!finalFlag) {
-          // Если хост — домен, а не IP, резолвить его не будем ради скорости, просто чекнем регуляркой
+        // Объединенная логика: ЕСЛИ флага в комменте не было вообще, определяем по IP
+        if (!finalFlag || finalFlag === '🌐') {
           const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
           if (isIp) {
             finalFlag = await getCountryByIp(cfg.hostOrIp);
