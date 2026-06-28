@@ -11,7 +11,6 @@ const MAX_PING = 900;          // Оптимальный таймаут (в мс
 async function discoverSources() {
   console.log("📥 Загрузка проверенной базы репозиториев (Raw-ссылки)...");
   
-  // Твой оригинальный список, который давал 3500+ конфигов
   const sources = new Set([
     "https://raw.githubusercontent.com/Ai123999/5Frid/refs/heads/main/5Frid_Notorgamers",
     "https://yax.nenadoblokirowatgnidda.ru/exec?url=http%3A%2F%2F77.110.104.181%3A5002%2Fsub%2FVGdydXNzaWEsMTc4MTc4OTk1Mw20zr9u72oH",
@@ -76,12 +75,12 @@ async function discoverSources() {
     "https://mifa.world/other"
   ]);
 
-  // Твой цикл генерации репозиториев (зеркала с 2 по 26) — именно он давал основную массу!
+  // Зеркала goida-vpn-configs (с 2 по 26)
   for (let i = 2; i <= 26; i++) {
     sources.add(`https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/${i}.txt`);
   }
 
-  // Telegram-каналы (в дополнение для свежести)
+  // Telegram-каналы
   const tgChannels = ['vless_configs', 'free_vless_vpn', 'vpn_reality', 'vless_reality_ru'];
   for (const channel of tgChannels) {
     sources.add(`https://t.me/s/${channel}`);
@@ -100,7 +99,7 @@ function extractConfigsFromText(text) {
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
 
-  // 2. Сбор из голых параметров серверов (если раскиданы текстом)
+  // 2. Сбор из голых параметров серверов
   const ipPortRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]{2,5})/g;
   const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   const pbkRegex = /pbk=([a-zA-Z0-9_-]+)/;
@@ -119,7 +118,7 @@ function extractConfigsFromText(text) {
       const pbk = context.match(pbkRegex)?.[1] || '';
       const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru';
       
-      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🤖 Reconstructed`;
+      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🌐 Obhod WBL`;
       list.push(generatedVless);
     }
   }
@@ -186,7 +185,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт восстановленного комбайна...`);
+  console.log(`🚀 Старт чекера с оригинальным переименованием...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -197,7 +196,6 @@ async function main() {
     let text = await fetchTextWithHeaders(src, { 'User-Agent': 'Mozilla/5.0' });
     if (!text) continue;
 
-    // Парсим обоими методами: и готовые ссылки, и разбитые сервера
     const matches = extractConfigsFromText(text);
     
     for (let line of matches) {
@@ -225,9 +223,9 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // Старое оригинальное переименование
+      // ИЗНАЧАЛЬНОЕ ОРИГИНАЛЬНОЕ ПЕРЕИМЕНОВАНИЕ
       const flags = extractFlags(comment);
-      let label = sni ? `${flags} SNI: ${sni}` : `${flags} IP: ${hostOrIp}`;
+      let label = `${flags} | Obhod WBL`; // То самое оригинальное название
 
       seenUrls.add(line);
       seenServers.add(serverKey); 
