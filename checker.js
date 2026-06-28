@@ -118,7 +118,7 @@ function extractConfigsFromText(text) {
       const pbk = context.match(pbkRegex)?.[1] || '';
       const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru';
       
-      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#Obhod WBL`;
+      let generatedVless = `vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🌐 | ${sni} | Obhod WBL`;
       list.push(generatedVless);
     }
   }
@@ -126,26 +126,13 @@ function extractConfigsFromText(text) {
   return list;
 }
 
-// Умная функция извлечения флагов с поддержкой URL-декодирования
-function extractFlagsAndIcons(rawComment) {
-  if (!rawComment) return '🌐';
-  
-  let decoded = rawComment;
-  try {
-    // Декодируем %F0%9F%87%B7%F0%9F%87%BA обратно в живые эмодзи
-    decoded = decodeURIComponent(rawComment);
-  } catch (e) {}
-
-  // Ищем чистые юникод-эмодзи флагов стран
+// Твоя оригинальная функция из самого первого скрипта
+function extractFlags(text) {
+  if (!text) return '🌐';
+  try { text = decodeURIComponent(text); } catch(e) {} // Декодируем на случай %F0%9F...
   const flagRegex = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/g;
-  const matches = decoded.match(flagRegex);
-  if (matches) return matches.join('');
-
-  // Если флага нет, но в начале комментария стоят другие эмодзи или значки (например 🚀, ⚡, 💎), забираем их
-  const cleanStart = decoded.trim().substring(0, 3).trim();
-  if (cleanStart) return cleanStart;
-
-  return '🌐'; 
+  const matches = text.match(flagRegex);
+  return matches ? matches.join('') : '🌐';
 }
 
 function fetchTextWithHeaders(url, headers = {}) {
@@ -199,7 +186,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт чекера с декодированием флагов [флаг | сни | Obhod WBL]...`);
+  console.log(`🚀 Старт чекера с оригинальным переименованием...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -237,11 +224,10 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // СБОРКА ТВОЕЙ МЕТКИ: флаг | сни | Obhod WBL
-      const flagIcon = extractFlagsAndIcons(comment);
+      // ОРИГИНАЛЬНОЕ ТВОЕ ПЕРЕИМЕНОВАНИЕ ИЗ САМОЙ ПЕРВОЙ ВЕРСИИ
+      const flags = extractFlags(comment);
       const currentSni = sni ? sni : hostOrIp;
-      
-      let label = `${flagIcon} | ${currentSni} | Obhod WBL`;
+      let label = `${flags} | ${currentSni} | Obhod WBL`;
 
       seenUrls.add(line);
       seenServers.add(serverKey); 
