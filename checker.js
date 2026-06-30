@@ -3,9 +3,9 @@ const https = require('https');
 const tls = require('tls');
 
 // ======================== НАСТРОЙКИ ========================
-const MAX_CONFIGS = 6000;      // Лимит собираемых уникальных объектов
-const PARALLEL_LIMIT = 50;     // Количество одновременных тестов
-const MAX_PING = 900;          // Оптимальный таймаут (в мс)
+const MAX_CONFIGS = 40000;     // Увеличено, чтобы парсить ВСЕ источники без остановок
+const PARALLEL_LIMIT = 40;     // Оптимальный поток для стабильности TLS и GeoIP запросов
+const MAX_PING = 900;          // Тайм-аут проверки доступности (в мс)
 
 // Кэш для гео-данных, чтобы экономить ресурсы
 const ipGeoCache = new Map();
@@ -75,13 +75,11 @@ async function discoverSources() {
     "https://raw.githubusercontent.com/ShadowException/VPN/refs/heads/main/configs/VPN-cat",
     "https://sub.pfvpn.cfd/free/sub",
     "https://raw.githubusercontent.com/flaafix/AetrisVPN-white-list-lite/refs/heads/main/AetrisVPN.txt",
-    "https://vpn.zotus.ru/sub.php",
     "https://raw.githubusercontent.com/sch2kw4r/sch2VPN/refs/heads/main/sch2VPN",
     "https://alley.serv00.net/youtube",
     "https://rostunnel.vercel.app/mega.txt",
     "https://raw.githubusercontent.com/luxxuria/harvester/refs/heads/main/non_ru.txt",
     "https://gitflic.ru/project/sigil/my-new-cool-project/blob/raw?file=whitelist",
-    "https://raw.githubusercontent.com/dequar/deqwl/refs/heads/main/deray.txt",
     "https://raw.githubusercontent.com/AirLinkVPN1/AirLinkVPN/refs/heads/main/rkn_white_list",
     "https://raw.githubusercontent.com/btsk161/Freeinternet_byMygalaru.github.io/refs/heads/main/premium.txt",
     "https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/vless.txt",
@@ -106,12 +104,10 @@ async function discoverSources() {
     "https://oplatasite.ru/sub/dXNlcl8xODk1NTYwMTgzLDE3ODE5NjEwNzUGBz7FKJurd",
     "https://gist.githubusercontent.com/HalyavusVPNUS/a93def732d3c624029c09c393dd0772e/raw/f4d140f55fc4831652673693f5fe74fc483b762e/%25D0%25BA%25D0%25BE%25D0%25BD%25D1%2584%25D0%25B8%25D0%25B3%25D0%25B8",
     "https://sub.savvka.fun/whitelist",
-    "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/WildVFmini",
     "https://raw.githubusercontent.com/WSJuJuB01/WS_Parser/refs/heads/main/subscription.txt",
     "https://gitverse.ru/api/repos/Catlerok_glasha/catwhiteMIRROR/raw/branch/master/configs.txt",
     "https://gitverse.ru/api/repos/cid-uscoritel/cid-catwhite-uscoritel/raw/branch/master/configs.txt",
     "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
@@ -181,7 +177,7 @@ function getFlagEmoji(countryCode) {
     .toUpperCase()
     .split('')
     .map(char => 127397 + char.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
+  return String.fromPoint(...codePoints);
 }
 
 // Перевод IP-строки в число для быстрого сравнения подсетей
@@ -219,12 +215,12 @@ function getCountryByIp(ip) {
     }
   }
 
-  // 2. СЕТЕВОЙ ЗАПРОС (с рандомной задержкой от блокировок)
+  // 2. СЕТЕВОЙ ЗАПРОС (прямой эндпоинт без "demo." для стабильности)
   return new Promise((resolve) => {
     setTimeout(() => {
-      const url = `https://demo.ip-api.com/json/${ip}?fields=status,countryCode`;
+      const url = `https://ip-api.com/json/${ip}?fields=status,countryCode`;
       
-      const req = https.get(url, { timeout: 1500, headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      const req = https.get(url, { timeout: 2000, headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
         let raw = '';
         res.on('data', chunk => raw += chunk);
         res.on('end', () => {
@@ -242,7 +238,7 @@ function getCountryByIp(ip) {
       
       req.on('error', () => resolve('🌐'));
       req.on('timeout', () => { req.destroy(); resolve('🌐'); });
-    }, Math.random() * 2500); 
+    }, Math.random() * 2000); 
   });
 }
 
@@ -334,7 +330,7 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // Читаем флаг из коммента (если спам-пачка, режем до одного флага)
+      // Читаем флаг из комментария (если он там есть)
       let parsedFlag = extractFlags(comment);
       if (parsedFlag && parsedFlag.length > 4) {
         parsedFlag = parsedFlag.substring(0, 4);
@@ -362,16 +358,17 @@ async function main() {
 
       const alive = await checkTlsWithPing(cfg.hostOrIp, cfg.port, cfg.sni);
       if (alive) {
-        let finalFlag = cfg.parsedFlag;
+        let finalFlag = '🌐';
+        const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
+
+        // ИЗМЕНЕНИЕ: Сначала определяем страну по реальному IP-адресу
+        if (isIp) {
+          finalFlag = await getCountryByIp(cfg.hostOrIp);
+        }
         
-        // Объединенная логика: ЕСЛИ флага в комменте не было вообще, определяем по IP
-        if (!finalFlag || finalFlag === '🌐') {
-          const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
-          if (isIp) {
-            finalFlag = await getCountryByIp(cfg.hostOrIp);
-          } else {
-            finalFlag = '🌐';
-          }
+        // Резервный вариант: если по IP определить не удалось, берем флаг из комментария источника
+        if (finalFlag === '🌐' && cfg.parsedFlag) {
+          finalFlag = cfg.parsedFlag;
         }
 
         const currentSni = cfg.sni ? cfg.sni : cfg.hostOrIp;
