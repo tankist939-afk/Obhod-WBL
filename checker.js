@@ -1,14 +1,17 @@
 const fs = require('fs');
 const https = require('https');
 const tls = require('tls');
+// Используем локальную базу данных. Она скачивается один раз при npm install
+// и проверяет IP внутри памяти компьютера мгновенно (без запросов в интернет)
+const geoip = require('geoip-lite'); 
 
 // ======================== НАСТРОЙКИ ========================
-const MAX_CONFIGS = 40000;     // Увеличено, чтобы парсить ВСЕ источники без остановок
-const PARALLEL_LIMIT = 40;     // Оптимальный поток для стабильности TLS и GeoIP запросов
-const MAX_PING = 900;          // Тайм-аут проверки доступности (в мс)
+const MAX_CONFIGS = 60000;     
+const PARALLEL_LIMIT = 1000;   // Твоя желаемая скорость (как в NekoBox)
+const MAX_PING = 900;          
 
-// Кэш для гео-данных, чтобы экономить ресурсы
-const ipGeoCache = new Map();
+// Настройка системного агента Node.js для работы с огромным количеством потоков
+https.globalAgent.maxSockets = PARALLEL_LIMIT;
 
 // ======================== СТАБИЛЬНЫЙ СПИСОК ЖИВЫХ ИСТОЧНИКОВ ========================
 async function discoverSources() {
@@ -132,7 +135,7 @@ async function discoverSources() {
   return Array.from(sources);
 }
 
-// ======================== КОМБИНИРОВАННЫЙ ЭКСТРАКТОР ========================
+// ======================== ЭКСТРАКТОРЫ ========================
 function extractConfigsFromText(text) {
   const list = [];
   const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`]+/g;
@@ -161,7 +164,6 @@ function extractConfigsFromText(text) {
   return list;
 }
 
-// Извлечение флагов из комментария
 function extractFlags(text) {
   if (!text) return '';
   try { text = decodeURIComponent(text); } catch(e) {}
@@ -170,81 +172,28 @@ function extractFlags(text) {
   return matches ? matches.join('') : '';
 }
 
-// Преобразование ISO-кода в эмодзи-флаг
 function getFlagEmoji(countryCode) {
   if (!countryCode || countryCode.length !== 2) return '🌐';
   const codePoints = countryCode
     .toUpperCase()
     .split('')
     .map(char => 127397 + char.charCodeAt(0));
-  return String.fromPoint(...codePoints);
+  return String.fromCodePoint(...codePoints);
 }
 
-// Перевод IP-строки в число для быстрого сравнения подсетей
-function ipToLong(ip) {
-  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
-}
-
-// ======================== ОБЪЕДИНЕННАЯ ГЕОЛОКАЦИЯ ========================
-function getCountryByIp(ip) {
-  if (ipGeoCache.has(ip)) return Promise.resolve(ipGeoCache.get(ip));
-  
-  const ipLong = ipToLong(ip);
-
-  // 1. ЛОКАЛЬНАЯ БАЗА: Моментально ловим самые частые IP-диапазоны ру-серверов
-  const ruRanges = [
-    { start: '5.101.156.0', end: '5.101.159.255' },
-    { start: '31.184.192.0', end: '31.184.255.255' },
-    { start: '45.132.196.0', end: '45.132.199.255' },
-    { start: '77.82.0.0', end: '77.82.255.255' },
-    { start: '80.78.240.0', end: '80.78.255.255' },
-    { start: '91.210.204.0', end: '91.210.207.255' },
-    { start: '94.25.0.0', end: '94.25.255.255' },
-    { start: '109.194.0.0', end: '109.195.255.255' },
-    { start: '176.59.0.0', end: '176.60.255.255' },
-    { start: '178.176.0.0', end: '178.177.255.255' },
-    { start: '185.12.92.0', end: '185.12.95.255' },
-    { start: '188.162.0.0', end: '188.163.255.255' },
-    { start: '213.87.0.0', end: '213.87.255.255' }
-  ];
-
-  for (const r of ruRanges) {
-    if (ipLong >= ipToLong(r.start) && ipLong <= ipToLong(r.end)) {
-      ipGeoCache.set(ip, '🇷🇺');
-      return Promise.resolve('🇷🇺');
-    }
+// ======================== МГНОВЕННОЕ ЛОКАЛЬНОЕ ГЕО ========================
+function getCountryByIpLocal(ip) {
+  // Выполняется за 0ms, так как база находится в ОЗУ
+  const geo = geoip.lookup(ip);
+  if (geo && geo.country) {
+    return getFlagEmoji(geo.country);
   }
-
-  // 2. СЕТЕВОЙ ЗАПРОС (прямой эндпоинт без "demo." для стабильности)
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const url = `https://ip-api.com/json/${ip}?fields=status,countryCode`;
-      
-      const req = https.get(url, { timeout: 2000, headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
-        let raw = '';
-        res.on('data', chunk => raw += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(raw);
-            if (json.status === 'success' && json.countryCode) {
-              const flag = getFlagEmoji(json.countryCode);
-              ipGeoCache.set(ip, flag);
-              return resolve(flag);
-            }
-          } catch (e) {}
-          resolve('🌐');
-        });
-      });
-      
-      req.on('error', () => resolve('🌐'));
-      req.on('timeout', () => { req.destroy(); resolve('🌐'); });
-    }, Math.random() * 2000); 
-  });
+  return '🌐';
 }
 
 function fetchTextWithHeaders(url, headers = {}) {
   return new Promise((resolve) => {
-    https.get(url, { headers, timeout: 6000 }, (res) => {
+    https.get(url, { headers, timeout: 5000 }, (res) => {
       let data = '';
       if (res.statusCode !== 200) return resolve('');
       res.on('data', chunk => data += chunk);
@@ -253,10 +202,12 @@ function fetchTextWithHeaders(url, headers = {}) {
   });
 }
 
+// ======================== ОПТИМИЗИРОВАННЫЙ TLS ТЕСТ ========================
 function checkTlsWithPing(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
     const startTime = Date.now();
+    
     const timeoutTimer = setTimeout(() => cleanup(false), MAX_PING);
 
     const options = {
@@ -265,7 +216,8 @@ function checkTlsWithPing(host, port, sni) {
       servername: sni || host,
       rejectUnauthorized: false,
       timeout: MAX_PING,
-      ciphers: 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256'
+      // Легкие шифры для экономии CPU при массовом тесте
+      ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384'
     };
 
     let socket;
@@ -293,13 +245,14 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт объединенного гибридного чекера...`);
+  console.log(`🚀 Старт ультра-быстрого чекера (Лимит параллельности: ${PARALLEL_LIMIT})...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
   const seenUrls = new Set();
   const seenServers = new Set(); 
 
+  // 1. Быстрый сбор всех ссылок
   for (const src of dynamicSources) {
     let text = await fetchTextWithHeaders(src, { 'User-Agent': 'Mozilla/5.0' });
     if (!text) continue;
@@ -330,11 +283,8 @@ async function main() {
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
-      // Читаем флаг из комментария (если он там есть)
       let parsedFlag = extractFlags(comment);
-      if (parsedFlag && parsedFlag.length > 4) {
-        parsedFlag = parsedFlag.substring(0, 4);
-      }
+      if (parsedFlag && parsedFlag.length > 4) parsedFlag = parsedFlag.substring(0, 4);
 
       seenUrls.add(line);
       seenServers.add(serverKey); 
@@ -345,11 +295,12 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Тестируем скорость и геопозицию...`);
+  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Запуск теста скорости в ${PARALLEL_LIMIT} потоков...`);
 
   const liveConfigs = [];
   let index = 0;
 
+  // 2. Асинхронные воркеры (работают на максимальной скорости без сетевых задержек GeoIP)
   async function worker() {
     while (index < rawConfigs.length) {
       const currentIdx = index++;
@@ -361,12 +312,11 @@ async function main() {
         let finalFlag = '🌐';
         const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
 
-        // ИЗМЕНЕНИЕ: Сначала определяем страну по реальному IP-адресу
         if (isIp) {
-          finalFlag = await getCountryByIp(cfg.hostOrIp);
+          // Мгновенное определение страны без отправки запросов в интернет
+          finalFlag = getCountryByIpLocal(cfg.hostOrIp);
         }
         
-        // Резервный вариант: если по IP определить не удалось, берем флаг из комментария источника
         if (finalFlag === '🌐' && cfg.parsedFlag) {
           finalFlag = cfg.parsedFlag;
         }
@@ -379,13 +329,14 @@ async function main() {
     }
   }
 
+  // Запускаем 1000 параллельных потоков
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
   console.log(`✅ Готово! Проверку прошли: ${liveConfigs.length} серверов.`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL Hybrid Cleaner\n#profile-update-interval: 1\n#announce: 👑 Комбинированная база | Живых: ${liveConfigs.length} | ${timestamp} UTC\n\n`;
+  const header = `#profile-title: Obhod WBL Turbo Cleaner\n#profile-update-interval: 1\n#announce: 👑 Турбо база | Живых: ${liveConfigs.length} | ${timestamp} UTC\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
   console.log('💾 configs.txt успешно сохранен!');
