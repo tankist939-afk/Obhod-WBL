@@ -22,9 +22,14 @@ jobs:
         with:
           node-version: 24
 
+      # ======================== ДОБАВЛЕННЫЙ ШАГ ========================
+      - name: Install turbo geo dependencies
+        run: npm install geoip-lite
+      # =================================================================
+
       - name: Run checker
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # <--- ВОТ ЭТА СТРОКА ДОБАВЛЕНА
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node checker.js
 
       - name: Commit and push changes
