@@ -13,7 +13,62 @@ const MAX_PING = 900;
 // Настройка системного агента Node.js для работы с огромным количеством потоков
 https.globalAgent.maxSockets = PARALLEL_LIMIT;
 
-// ======================== СТАБИЛЬНЫЙ СПИСОК ЖИВЫХ ИСТОЧНИКОВ ========================
+// ======================== БЕЛЫЕ СПИСКИ (ФИЛЬТРЫ) ========================
+const WHITELIST_DOMAINS = new Set([
+  'gosuslugi.ru', 'mos.ru', 'nalog.ru', 'zakupki.gov.ru', 'kremlin.ru',
+  'government.ru', 'gd.ru', 'genproc.gov.ru', 'mvd.ru', 'mchs.ru',
+  'rostrud.gov.ru', 'ach.gov.ru', 'rsv.ru', 'mintrud.gov.ru', 'minfin.gov.ru',
+  'council.gov.ru', 'ksrf.ru', 'scrf.gov.ru', 'mid.ru', 'minobrnauki.gov.ru',
+  'minzdrav.gov.ru', 'minsport.gov.ru', 'minstroyrf.ru', 'mintrans.gov.ru',
+  'minpromtorg.gov.ru', 'digital.gov.ru', 'roskomnadzor.ru',
+  'mirpay.ru', 'mironline.ru', 'sbp.nspk.ru',
+  'sberbank.ru', 'tbank.ru', 'alfabank.ru', 'vtb.ru', 'psbank.ru',
+  'gazprombank.ru', 'open.ru', 'rshb.ru', 'mkb.ru', 'absolutbank.ru',
+  'sovcombank.ru', 'bankuralsib.ru', 'raiffeisen.ru', 'citibank.ru',
+  'unicreditbank.ru', 'rosbank.ru',
+  'beeline.ru', 'megafon.ru', 'mts.ru', 'rt.ru', 't2.ru',
+  'sbermobile.ru', 'tmobile.ru', 'ertelecom.ru', 'domru.ru', 'ttk.ru',
+  'rostelecom.ru', 'tinkoff.ru', 'yota.ru',
+  'vk.com', 'ok.ru', 'mail.ru', 'yandex.ru', 'dzen.ru', 'rutube.ru', 'max.ru',
+  'vkvideo.ru', 'sferum.ru', 'disk.yandex.ru', '360.yandex.ru', 'kinopoisk.ru',
+  'ivi.ru', 'hh.ru', 'pikabu.ru',
+  'ozon.ru', 'wildberries.ru', 'avito.ru', 'megamarket.ru', 'sbermegamarket.ru',
+  'magnit.ru', 'vkusvill.ru', 'dixy.ru', 'detmir.ru', 'vkusnoitochka.ru',
+  'burgerking.ru', 'kfc.ru', 'cdek.ru', 'samokat.ru', 'kuper.ru', 'gsev.ru',
+  'utkonos.ru', 'sbermarket.ru', 'lenta.com', 'perekrestok.ru', '5ka.ru',
+  'metro-cc.ru', 'ashan.ru', 'spar.ru', 'petrovich.ru', 'dns-shop.ru', 'drom.ru', 'apteka.ru',
+  'rbc.ru', 'gazeta.ru', 'lenta.ru', 'rambler.ru', 'kp.ru', 'ria.ru', 'iz.ru',
+  'tass.ru', 'kommersant.ru', 'vedomosti.ru', 'mk.ru', 'rg.ru', 'ntv.ru', '1tv.ru',
+  'rt.ru', 'tnt-online.ru', 'ctc.ru', 'matchtv.ru', 'zvezdanews.ru', 'vmeste-rf.tv',
+  'aif.ru', 'pnp.ru', 'vesti.ru', 'russia.tv', 'tvzvezda.ru', 'ren.tv', '5-tv.ru',
+  'domashniy.ru', 'muz-tv.ru', 'otr-online.ru', 'tvcenter.ru', 'tv3.ru', 'spastv.ru',
+  '2gis.ru', 'russianhighways.ru', 'rzd.ru', 'tutu.ru',
+  'maxim.taxi', 'gismeteo.ru', 'aeroflot.ru',
+  'pobeda.aero', 's7.ru', 'utair.ru', 'grandservis.ru', 'citydrive.ru',
+  'obr.ru', 'edu.ru', 'ege.edu.ru', 'school.ru', 'moodle.ru', 'itmo.ru',
+  'bmstu.ru', 'spbu.ru', 'msu.ru', 'mipt.ru', 'hse.ru', 'ranepa.ru', 'mgimo.ru',
+  'urfu.ru', 'kpfu.ru', 'nntu.ru', 'tpu.ru', 'susu.ru', 'donstu.ru', 'sfedu.ru',
+  'job.ru', 'rabota.ru', 'superjob.ru', 'zarplata.ru',
+  'sberid.ru', 'goskey.ru', 'chestnyznak.ru', 'sbis.ru', 'diadoc.ru',
+  'pfr.gov.ru', 'fss.ru', 'cmcsmd.ru', 'banki.ru', 'm.gosuslugi.ru',
+  'kaspersky.ru', 'drweb.ru', 'tensor.ru', 'kontur.ru', 'evotor.ru'
+]);
+
+const ALLOWED_CIDRS = [
+  '5.255.255.0/24', '77.88.0.0/18', '87.250.250.0/24',
+  '95.108.0.0/16', '217.69.128.0/20', '109.120.128.0/17',
+  '185.30.164.0/22', '91.200.120.0/24', '193.232.96.0/24',
+  '92.223.80.0/22', '178.248.0.0/21'
+];
+
+// Парсим CIDR один раз при запуске для максимального быстродействия
+const PARSED_CIDRS = ALLOWED_CIDRS.map(cidr => {
+  const [subnet, bits] = cidr.split('/');
+  const mask = ~(2 ** (32 - parseInt(bits, 10)) - 1);
+  return { ip: ipToLong(subnet), mask };
+});
+
+// СТАБИЛЬНЫЙ СПИСОК ЖИВЫХ ИСТОЧНИКОВ
 async function discoverSources() {
   console.log("📥 Загрузка проверенной базы репозиториев (Raw-ссылки)...");
   
@@ -55,7 +110,7 @@ async function discoverSources() {
     "https://yax.nenadoblokirowatgnidda.ru/exec?url=http%3A%2F%2F77.110.104.181%3A5002%2Fsub%2FdGd0ZnRnLDE3ODA1ODc4MTI4fdXFeLwfA",
     "https://vspsub.onrender.com/get/88tzen",
     "https://109.237.98.81:2096/kvn/7qpy5bx22ejc4d5i",
-    "https://gist.githubusercontent.com/moksim76/19e5c747b19f9ab4610609bcde01fb3d/raw/5d9ac6883ceb0a9e2e94040defabb8b97c1f317d/XuexVpn%2520Free",
+    "https://gist.githubusercontent.com/moksim76/19e5c747b19f9ab4610609bcde01fb3d/raw/5d9ac6883ceb0a9e2e94040defabb8b97c1f317d/XuexVpn%20Free",
     "https://bostvpn.duckdns.org:2096/YVH2bhbw2324w/i3cau11f8qfx49su",
     "https://vspsub.onrender.com/get/5xxuhj",
     "https://vpn.zotus.ru/sub.php",
@@ -69,7 +124,7 @@ async function discoverSources() {
     "https://kfwl-sub.vercel.app/sub",
     "https://hub.mos.ru/kfwl/sub/raw/main/sub.txt",
     "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt",
-    "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/ХЕРЗНАЕТЧО",
+    "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/%D0%A5%D0%95%D0%A0%D0%97%D0%9D%D0%90%D0%95%D0%A2%D0%A7%D0%9E",
     "https://github.com/ksenkovsolo/HardVPN-bypass-WhiteLists-/raw/refs/heads/main/vpn-lte/WHITELIST-ALL.txt",
     "https://raw.githubusercontent.com/modrinthmodification-create/ownedvpn/main/subscription.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/refs/heads/main/checked/RU_Best/ru_white_all_WHITE.txt",
@@ -135,6 +190,29 @@ async function discoverSources() {
   return Array.from(sources);
 }
 
+// ======================== УТИЛИТЫ ДЛЯ ВАЛИДАЦИИ ФИЛЬТРОВ ========================
+function ipToLong(ip) {
+  return ip.split('.').reduce((long, octet) => (long << 8) + parseInt(octet, 10), 0) >>> 0;
+}
+
+function isIpInCidr(ip) {
+  if (!/^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip)) return false;
+  const ipLong = ipToLong(ip);
+  for (const cidr of PARSED_CIDRS) {
+    if ((ipLong & cidr.mask) === (cidr.ip & cidr.mask)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSniAllowed(sni) {
+  if (!sni) return false;
+  const lowerSni = sni.toLowerCase().trim();
+  // Проверяем прямое совпадение или совпадение по поддомену (напр., sub.yandex.ru)
+  return WHITELIST_DOMAINS.has(lowerSni) || [...WHITELIST_DOMAINS].some(domain => lowerSni.endsWith('.' + domain));
+}
+
 // ======================== ЭКСТРАКТОРЫ ========================
 function extractConfigsFromText(text) {
   const list = [];
@@ -183,7 +261,6 @@ function getFlagEmoji(countryCode) {
 
 // ======================== МГНОВЕННОЕ ЛОКАЛЬНОЕ ГЕО ========================
 function getCountryByIpLocal(ip) {
-  // Выполняется за 0ms, так как база находится в ОЗУ
   const geo = geoip.lookup(ip);
   if (geo && geo.country) {
     return getFlagEmoji(geo.country);
@@ -216,7 +293,6 @@ function checkTlsWithPing(host, port, sni) {
       servername: sni || host,
       rejectUnauthorized: false,
       timeout: MAX_PING,
-      // Легкие шифры для экономии CPU при массовом тесте
       ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384'
     };
 
@@ -252,7 +328,10 @@ async function main() {
   const seenUrls = new Set();
   const seenServers = new Set(); 
 
-  // 1. Быстрый сбор всех ссылок
+  let totalExtracted = 0;
+  let rejectedByFilters = 0;
+
+  // 1. Быстрый сбор и фильтрация ссылок
   for (const src of dynamicSources) {
     let text = await fetchTextWithHeaders(src, { 'User-Agent': 'Mozilla/5.0' });
     if (!text) continue;
@@ -261,6 +340,7 @@ async function main() {
     
     for (let line of matches) {
       if (!line || seenUrls.has(line)) continue;
+      totalExtracted++;
 
       let urlPart = line, comment = '';
       const hIdx = line.indexOf('#');
@@ -280,6 +360,15 @@ async function main() {
         try { sni = decodeURIComponent(sniMatch[1]); } catch (e) { sni = sniMatch[1]; }
       }
 
+      // 🛑 ФИЛЬТРАЦИЯ: Проверяем SNI и CIDR до добавления в очередь чекера
+      const sniValid = isSniAllowed(sni);
+      const cidrValid = isIpInCidr(hostOrIp);
+
+      if (!sniValid && !cidrValid) {
+        rejectedByFilters++;
+        continue; // Скипаем, если конфиг не совпал ни с белым SNI, ни с белым CIDR
+      }
+
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
       if (seenServers.has(serverKey)) continue;
 
@@ -295,12 +384,14 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📥 Извлечено уникальных конфигов: ${rawConfigs.length}. Запуск теста скорости в ${PARALLEL_LIMIT} потоков...`);
+  console.log(`📊 Всего найдено ссылок: ${totalExtracted}`);
+  console.log(`✂️ Отфильтровано (не подошли под SNI/CIDR): ${rejectedByFilters}`);
+  console.log(`📥 Запуск теста скорости для оставшихся уникальных конфигов: ${rawConfigs.length} в ${PARALLEL_LIMIT} потоков...`);
 
   const liveConfigs = [];
   let index = 0;
 
-  // 2. Асинхронные воркеры (работают на максимальной скорости без сетевых задержек GeoIP)
+  // 2. Асинхронные воркеры
   async function worker() {
     while (index < rawConfigs.length) {
       const currentIdx = index++;
@@ -313,7 +404,6 @@ async function main() {
         const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
 
         if (isIp) {
-          // Мгновенное определение страны без отправки запросов в интернет
           finalFlag = getCountryByIpLocal(cfg.hostOrIp);
         }
         
@@ -329,7 +419,6 @@ async function main() {
     }
   }
 
-  // Запускаем 1000 параллельных потоков
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
