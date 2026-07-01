@@ -13,6 +13,9 @@ const MAX_PING = 900;
 // Настройка системного агента Node.js для работы с огромным количеством потоков
 https.globalAgent.maxSockets = PARALLEL_LIMIT;
 
+// Ротация доменов для теста, чтобы сайты и ТСПУ не банили за DDoS/Спам при 1000 потоков
+const TEST_DOMAINS = ['gosuslugi.ru', 'mos.ru', 'nalog.ru', 'vk.com', 'ok.ru', 'mail.ru', 'yandex.ru', 'dzen.ru', 't.me'];
+
 // ======================== БЕЛЫЕ СПИСКИ (ФИЛЬТРЫ) ========================
 const WHITELIST_DOMAINS = new Set([
   'gosuslugi.ru', 'mos.ru', 'nalog.ru', 'zakupki.gov.ru', 'kremlin.ru',
@@ -61,16 +64,16 @@ const ALLOWED_CIDRS = [
   '92.223.80.0/22', '178.248.0.0/21'
 ];
 
-// Парсим CIDR один раз при запуске для максимального быстродействия
+// Ускоренный парсинг CIDR в ОЗУ один раз на старте
 const PARSED_CIDRS = ALLOWED_CIDRS.map(cidr => {
   const [subnet, bits] = cidr.split('/');
   const mask = ~(2 ** (32 - parseInt(bits, 10)) - 1);
   return { ip: ipToLong(subnet), mask };
 });
 
-// СТАБИЛЬНЫЙ СПИСОК ЖИВЫХ ИСТОЧНИКОВ
+// СТАБИЛЬНЫЙ СПИСОК ИСТОЧНИКОВ
 async function discoverSources() {
-  console.log("📥 Загрузка проверенной базы репозиториев (Raw-ссылки)...");
+  console.log("📥 Загрузка проверенной базы репозиториев...");
   
   const sources = new Set([
     "https://raw.githubusercontent.com/SER38Off/happ-subscription/refs/heads/main/sub1-white-lists.txt",
@@ -209,8 +212,13 @@ function isIpInCidr(ip) {
 function isSniAllowed(sni) {
   if (!sni) return false;
   const lowerSni = sni.toLowerCase().trim();
-  // Проверяем прямое совпадение или совпадение по поддомену (напр., sub.yandex.ru)
-  return WHITELIST_DOMAINS.has(lowerSni) || [...WHITELIST_DOMAINS].some(domain => lowerSni.endsWith('.' + domain));
+  if (WHITELIST_DOMAINS.has(lowerSni)) return true;
+  for (const domain of WHITELIST_DOMAINS) {
+    if (lowerSni.endsWith('.' + domain) || domain.endsWith('.' + lowerSni)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // ======================== ЭКСТРАКТОРЫ ========================
@@ -259,7 +267,6 @@ function getFlagEmoji(countryCode) {
   return String.fromCodePoint(...codePoints);
 }
 
-// ======================== МГНОВЕННОЕ ЛОКАЛЬНОЕ ГЕО ========================
 function getCountryByIpLocal(ip) {
   const geo = geoip.lookup(ip);
   if (geo && geo.country) {
@@ -279,7 +286,7 @@ function fetchTextWithHeaders(url, headers = {}) {
   });
 }
 
-// ======================== ОПТИМИЗИРОВАННЫЙ TLS ТЕСТ ========================
+// ======================== УМНЫЙ TLS ТЕСТ С РОТАЦИЕЙ И ЗАГОЛОВКАМИ ========================
 function checkTlsWithPing(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
@@ -287,12 +294,18 @@ function checkTlsWithPing(host, port, sni) {
     
     const timeoutTimer = setTimeout(() => cleanup(false), MAX_PING);
 
+    // Если у прокси нет SNI, подставляем случайный разрешенный домен из пула ротации, 
+    // чтобы распределить нагрузку при массовом тесте (1000 потоков)
+    const randomSni = TEST_DOMAINS[Math.floor(Math.random() * TEST_DOMAINS.length)];
+    const targetSni = sni || randomSni;
+
     const options = {
       host: host,
       port: parseInt(port, 10),
-      servername: sni || host,
+      servername: targetSni,
       rejectUnauthorized: false,
       timeout: MAX_PING,
+      minVersion: 'TLSv1.3', // Имитируем современный Chrome
       ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384'
     };
 
@@ -360,13 +373,13 @@ async function main() {
         try { sni = decodeURIComponent(sniMatch[1]); } catch (e) { sni = sniMatch[1]; }
       }
 
-      // 🛑 ФИЛЬТРАЦИЯ: Проверяем SNI и CIDR до добавления в очередь чекера
+      // ФИЛЬТРАЦИЯ
       const sniValid = isSniAllowed(sni);
       const cidrValid = isIpInCidr(hostOrIp);
 
       if (!sniValid && !cidrValid) {
         rejectedByFilters++;
-        continue; // Скипаем, если конфиг не совпал ни с белым SNI, ни с белым CIDR
+        continue; 
       }
 
       const serverKey = `${hostOrIp}:${port}:${sni || 'nosni'}`;
@@ -384,9 +397,9 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📊 Всего найдено ссылок: ${totalExtracted}`);
-  console.log(`✂️ Отфильтровано (не подошли под SNI/CIDR): ${rejectedByFilters}`);
-  console.log(`📥 Запуск теста скорости для оставшихся уникальных конфигов: ${rawConfigs.length} в ${PARALLEL_LIMIT} потоков...`);
+  console.log(`📊 Всего извлечено ссылок: ${totalExtracted}`);
+  console.log(`✂️ Отсеяно фильтрами (не БС SNI/CIDR): ${rejectedByFilters}`);
+  console.log(`📥 Запуск распределенного теста в ${PARALLEL_LIMIT} потоков для ${rawConfigs.length} конфигов...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -422,13 +435,13 @@ async function main() {
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
-  console.log(`✅ Готово! Проверку прошли: ${liveConfigs.length} серверов.`);
+  console.log(`✅ Готово! Финальный отбор прошли: ${liveConfigs.length} серверов.`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const header = `#profile-title: Obhod WBL Turbo Cleaner\n#profile-update-interval: 1\n#announce: 👑 Турбо база | Живых: ${liveConfigs.length} | ${timestamp} UTC\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
-  console.log('💾 configs.txt успешно сохранен!');
+  console.log('💾 Результат сохранен в configs.txt!');
 }
 
 main();
