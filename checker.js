@@ -11,9 +11,9 @@ const PARALLEL_LIMIT = 1000;   // Твоя желаемая скорость (к
 const MAX_PING = 900;          
 
 // Настройка системного агента Node.js для работы с огромным количеством потоков
-https.globalAgent.maxSockets = PARALLEL_LIMIT;
+https.globalAgent.maxSockets = PARALLEL_LIMIT + 50; // Запас для скачивания источников
 
-// Ротация доменов для теста, чтобы сайты и ТСПУ не банили за DDoS/Спам при 1000 потоков
+// Ротация доменов для теста
 const TEST_DOMAINS = ['gosuslugi.ru', 'mos.ru', 'nalog.ru', 'vk.com', 'ok.ru', 'mail.ru', 'yandex.ru', 'dzen.ru', 't.me'];
 
 // ======================== БЕЛЫЕ СПИСКИ (ФИЛЬТРЫ) ========================
@@ -64,14 +64,17 @@ const ALLOWED_CIDRS = [
   '92.223.80.0/22', '178.248.0.0/21'
 ];
 
-// Ускоренный парсинг CIDR в ОЗУ один раз на старте
+function ipToLong(ip) {
+  return ip.split('.').reduce((long, octet) => (long << 8) + parseInt(octet, 10), 0) >>> 0;
+}
+
 const PARSED_CIDRS = ALLOWED_CIDRS.map(cidr => {
   const [subnet, bits] = cidr.split('/');
   const mask = ~(2 ** (32 - parseInt(bits, 10)) - 1);
   return { ip: ipToLong(subnet), mask };
 });
 
-// СТАБИЛЬНЫЙ СПИСОК ИСТОЧНИКОВ
+// ======================== ИСТОЧНИКИ ========================
 async function discoverSources() {
   console.log("📥 Загрузка проверенной базы репозиториев...");
   
@@ -193,18 +196,12 @@ async function discoverSources() {
   return Array.from(sources);
 }
 
-// ======================== УТИЛИТЫ ДЛЯ ВАЛИДАЦИИ ФИЛЬТРОВ ========================
-function ipToLong(ip) {
-  return ip.split('.').reduce((long, octet) => (long << 8) + parseInt(octet, 10), 0) >>> 0;
-}
-
+// ======================== УТИЛИТЫ ВАЛИДАЦИИ ========================
 function isIpInCidr(ip) {
   if (!/^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip)) return false;
   const ipLong = ipToLong(ip);
   for (const cidr of PARSED_CIDRS) {
-    if ((ipLong & cidr.mask) === (cidr.ip & cidr.mask)) {
-      return true;
-    }
+    if ((ipLong & cidr.mask) === (cidr.ip & cidr.mask)) return true;
   }
   return false;
 }
@@ -214,20 +211,29 @@ function isSniAllowed(sni) {
   const lowerSni = sni.toLowerCase().trim();
   if (WHITELIST_DOMAINS.has(lowerSni)) return true;
   for (const domain of WHITELIST_DOMAINS) {
-    if (lowerSni.endsWith('.' + domain) || domain.endsWith('.' + lowerSni)) {
-      return true;
-    }
+    if (lowerSni.endsWith('.' + domain) || domain.endsWith('.' + lowerSni)) return true;
   }
   return false;
 }
 
-// ======================== ЭКСТРАКТОРЫ ========================
+// ======================== УЛУЧШЕННЫЙ ЭКСТРАКТОР (ДЛЯ ТГ И HTML) ========================
 function extractConfigsFromText(text) {
   const list = [];
-  const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`]+/g;
+  
+  // Если это HTML со страницы Telegram, очищаем его от тегов, заменяя <br> на переносы
+  if (text.includes('class="tgme_channel_info"') || text.includes('</html')) {
+    text = text.replace(/<br\s*\/?>/gi, '\n');
+    text = text.replace(/<[^>]+>/g, ' '); // Удаляем все HTML-теги
+    // Декодируем базовые HTML-сущности, часто ломающие ссылки
+    text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  }
+
+  // Поиск стандартных URIs
+  const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`\\]+/g;
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
 
+  // Поиск raw IP:PORT с контекстом
   const ipPortRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]{2,5})/g;
   const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   const pbkRegex = /pbk=([a-zA-Z0-9_-]+)/;
@@ -269,24 +275,41 @@ function getFlagEmoji(countryCode) {
 
 function getCountryByIpLocal(ip) {
   const geo = geoip.lookup(ip);
-  if (geo && geo.country) {
-    return getFlagEmoji(geo.country);
-  }
+  if (geo && geo.country) return getFlagEmoji(geo.country);
   return '🌐';
 }
 
-function fetchTextWithHeaders(url, headers = {}) {
+// Улучшенные заголовки для обхода блокировок парсеров
+function fetchTextWithHeaders(url) {
   return new Promise((resolve) => {
-    https.get(url, { headers, timeout: 5000 }, (res) => {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5'
+    };
+
+    https.get(url, { headers, timeout: 7000 }, (res) => {
+      // Поддержка базовых редиректов (301/302), которые часто бывают на GitVerse/зеркалах
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+        return resolve(fetchTextWithHeaders(res.headers.location));
+      }
+
+      if (res.statusCode !== 200) {
+        console.error(`⚠️ Ошибка загрузки [Код ${res.statusCode}]: ${url}`);
+        return resolve('');
+      }
+
       let data = '';
-      if (res.statusCode !== 200) return resolve('');
       res.on('data', chunk => data += chunk);
       res.on('end', () => resolve(data));
-    }).on('error', () => resolve(''));
+    }).on('error', (err) => {
+      console.error(`❌ Ошибка сети для ${url}: ${err.message}`);
+      resolve('');
+    });
   });
 }
 
-// ======================== УМНЫЙ TLS ТЕСТ С РОТАЦИЕЙ И ЗАГОЛОВКАМИ ========================
+// ======================== TLS ТЕСТ С РОТАЦИЕЙ ========================
 function checkTlsWithPing(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
@@ -294,8 +317,6 @@ function checkTlsWithPing(host, port, sni) {
     
     const timeoutTimer = setTimeout(() => cleanup(false), MAX_PING);
 
-    // Если у прокси нет SNI, подставляем случайный разрешенный домен из пула ротации, 
-    // чтобы распределить нагрузку при массовом тесте (1000 потоков)
     const randomSni = TEST_DOMAINS[Math.floor(Math.random() * TEST_DOMAINS.length)];
     const targetSni = sni || randomSni;
 
@@ -305,7 +326,7 @@ function checkTlsWithPing(host, port, sni) {
       servername: targetSni,
       rejectUnauthorized: false,
       timeout: MAX_PING,
-      minVersion: 'TLSv1.3', // Имитируем современный Chrome
+      minVersion: 'TLSv1.3',
       ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384'
     };
 
@@ -334,7 +355,7 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт ультра-быстрого чекера (Лимит параллельности: ${PARALLEL_LIMIT})...`);
+  console.log(`🚀 Старт ультра-быстрого чекера (Параллельность: ${PARALLEL_LIMIT})...`);
   const dynamicSources = await discoverSources();
   
   const rawConfigs = [];
@@ -344,9 +365,9 @@ async function main() {
   let totalExtracted = 0;
   let rejectedByFilters = 0;
 
-  // 1. Быстрый сбор и фильтрация ссылок
+  // 1. Сбор и фильтрация ссылок
   for (const src of dynamicSources) {
-    let text = await fetchTextWithHeaders(src, { 'User-Agent': 'Mozilla/5.0' });
+    let text = await fetchTextWithHeaders(src);
     if (!text) continue;
 
     const matches = extractConfigsFromText(text);
@@ -397,9 +418,9 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`📊 Всего извлечено ссылок: ${totalExtracted}`);
+  console.log(`\n📊 Всего извлечено ссылок: ${totalExtracted}`);
   console.log(`✂️ Отсеяно фильтрами (не БС SNI/CIDR): ${rejectedByFilters}`);
-  console.log(`📥 Запуск распределенного теста в ${PARALLEL_LIMIT} потоков для ${rawConfigs.length} конфигов...`);
+  console.log(`📥 Запуск теста в ${PARALLEL_LIMIT} потоков для ${rawConfigs.length} конфигов...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -416,13 +437,8 @@ async function main() {
         let finalFlag = '🌐';
         const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
 
-        if (isIp) {
-          finalFlag = getCountryByIpLocal(cfg.hostOrIp);
-        }
-        
-        if (finalFlag === '🌐' && cfg.parsedFlag) {
-          finalFlag = cfg.parsedFlag;
-        }
+        if (isIp) finalFlag = getCountryByIpLocal(cfg.hostOrIp);
+        if (finalFlag === '🌐' && cfg.parsedFlag) finalFlag = cfg.parsedFlag;
 
         const currentSni = cfg.sni ? cfg.sni : cfg.hostOrIp;
         const label = `${finalFlag} | ${currentSni} | Obhod WBL`;
