@@ -74,6 +74,30 @@ const PARSED_CIDRS = ALLOWED_CIDRS.map(cidr => {
   return { ip: ipToLong(subnet), mask };
 });
 
+// Автоматическое приведение репозиториев к RAW ссылкам
+function normalizeToRawUrl(url) {
+  try {
+    let u = new URL(url);
+    // GitHub
+    if (u.hostname === 'github.com' && !u.pathname.includes('/raw/')) {
+      u.hostname = 'raw.githubusercontent.com';
+      u.pathname = u.pathname.replace('/blob/', '/');
+      return u.toString();
+    }
+    // GitVerse
+    if (u.hostname === 'gitverse.ru' && u.pathname.includes('/blob/')) {
+      u.pathname = u.pathname.replace('/blob/', '/raw/');
+      return u.toString();
+    }
+    // Codeberg
+    if (u.hostname === 'codeberg.org' && u.pathname.includes('/src/')) {
+      u.pathname = u.pathname.replace('/src/', '/raw/');
+      return u.toString();
+    }
+  } catch (e) {}
+  return url;
+}
+
 // ======================== ИСТОЧНИКИ ========================
 async function discoverSources() {
   console.log("📥 Загрузка проверенной базы репозиториев...");
@@ -87,7 +111,6 @@ async function discoverSources() {
     "https://gist.githubusercontent.com/yoontae-bit/eeb4d9bd9fa3c46b695c0bf96ef0acba/raw/662f57795d03a00bca9cf81785144d1bb37565a1/gistfile1.txt",
     "https://happ.ring-team.ru/sub/vqvmsfgqoz",
     "https://tinyurl.com/Simvo",
-    "https://happ.ring-team.ru/sub/vqvmsfgqoz",
     "https://happ.ring-team.ru/sub/b5lkwk1u9b",
     "https://is.wepogp.gay/bypass-hwid-lock-3z5O6BFAaJQzGlamvtSo?payload=teJa5U1EevPjDrwxP9eAeArtpaVCD9oExsYZPNhmu0V5X02YvaoSzkj%2B0XFqb%2BehYP7alm1UAjMJFfmCuVVbBaqcHQKcft6YIsKkSxQU40w%3D",
     "https://gist.githubusercontent.com/sevushyamamoto-stack/17bd65436db9cccddc55ef376e70cd7a/raw/fe6f77c72aa75b7364e5d2bdc008ef22b4cb16e9/gistfile1.txt",
@@ -103,7 +126,7 @@ async function discoverSources() {
     "https://happ.ring-team.ru/sub/sieq4r9ss1yx",
     "https://gist.githubusercontent.com/Bebta8881/c2703965b5d0e9352e1f2acdea00f7c1/raw/08fd812eaa691c87fb3ec622de3d97e586e7edf7/%25F0%259F%258C%25B6%25EF%25B8%258F%2520perec%2520vpn",
     "https://gist.githubusercontent.com/LIKE-FURRY/85b29308c2f37c04046fe65ebf8de870/raw/df9abf8e554301f0459f390f6002ba7f642420de/67",
-    "https://raw.githubusercontent.com/ReallySubHuman/SubForgeBot/main/subs/%D1%85%D1%83%D0%B9%D0%BB%D0%B0%D0%B2%D0%B0-%D0%B2%D0%BF%D0%BD-20260716102054.txt,
+    "https://raw.githubusercontent.com/ReallySubHuman/SubForgeBot/main/subs/%D1%85%D1%83%D0%B9%D0%BB%D0%B0%D0%B2%D0%B0-%D0%B2%D0%BF%D0%BD-20260716102054.txt",
     "https://bit.ly/4vwrRc",
     "https://vpn.akres.fun/protocols/vless/transports/grpc",
     "https://hub.mos.ru/panosenk/sukasubs/-/raw/main/purple.txt",
@@ -158,7 +181,7 @@ async function discoverSources() {
     "https://kfwl-sub.vercel.app/sub",
     "https://hub.mos.ru/kfwl/sub/raw/main/sub.txt",
     "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt",
-    "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/%D0%A5%D0%95%D0%A0%D0%97%D0%9D%D0%90%D0%95%D0%A2%D0%A7%D0%9E",
+    "https://gitverse.ru/api/repos/vansfenix/vansFenix/raw/branch/master/%D0%A5%D0%9Е%D0%A0%D0%97%D0%9D%D0%90%D0%95%D0%A2%D0%A7%D0%9E",
     "https://github.com/ksenkovsolo/HardVPN-bypass-WhiteLists-/raw/refs/heads/main/vpn-lte/WHITELIST-ALL.txt",
     "https://raw.githubusercontent.com/modrinthmodification-create/ownedvpn/main/subscription.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-checker-backend/refs/heads/main/checked/RU_Best/ru_white_all_WHITE.txt",
@@ -221,7 +244,8 @@ async function discoverSources() {
     sources.add(`https://t.me/s/${channel}`);
   }
 
-  return Array.from(sources);
+  // Применяем нормализацию ко всем ссылкам репозиториев для исключения дубликатов и битых форматов
+  return Array.from(sources).map(normalizeToRawUrl);
 }
 
 // ======================== УТИЛИТЫ ВАЛИДАЦИИ ========================
@@ -244,19 +268,26 @@ function isSniAllowed(sni) {
   return false;
 }
 
-// ======================== УЛУЧШЕННЫЙ ЭКСТРАКТОР (ДЛЯ ТГ И HTML) ========================
+// ======================== УЛУЧШЕННЫЙ ЭКСТРАКТОР ДЛЯ ТГ И HTML ========================
 function extractConfigsFromText(text) {
   const list = [];
   
-  // Если это HTML со страницы Telegram, очищаем его от тегов, заменяя <br> на переносы
+  // Улучшенный безопасный разбор Telegram страниц (вытаскиваем полные данные из атрибутов)
   if (text.includes('class="tgme_channel_info"') || text.includes('</html')) {
+    // Регулярка для вытаскивания полных ссылок из href ссылок (в превью тг они не бьются многоточием)
+    const hrefRegex = /href="((?:vless|trojan):\/\/[^"]+)"/gi;
+    let hrefMatch;
+    while ((hrefMatch = hrefRegex.exec(text)) !== null) {
+      list.push(hrefMatch[1]);
+    }
+
+    // Очищаем HTML для поиска raw конфигов в тегах <code>
     text = text.replace(/<br\s*\/?>/gi, '\n');
-    text = text.replace(/<[^>]+>/g, ' '); // Удаляем все HTML-теги
-    // Декодируем базовые HTML-сущности, часто ломающие ссылки
+    text = text.replace(/<[^>]+>/g, ' '); 
     text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
   }
 
-  // Поиск стандартных URIs
+  // Стандартный поиск URIs во всем остальном тексте
   const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`\\]+/g;
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
@@ -307,7 +338,6 @@ function getCountryByIpLocal(ip) {
   return '🌐';
 }
 
-// Улучшенные заголовки для обхода блокировок парсеров
 function fetchTextWithHeaders(url) {
   return new Promise((resolve) => {
     const headers = {
@@ -317,7 +347,6 @@ function fetchTextWithHeaders(url) {
     };
 
     https.get(url, { headers, timeout: 7000 }, (res) => {
-      // Поддержка базовых редиректов (301/302), которые часто бывают на GitVerse/зеркалах
       if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
         return resolve(fetchTextWithHeaders(res.headers.location));
       }
