@@ -1,17 +1,19 @@
 const fs = require('fs');
 const https = require('https');
+const http = require('http');
 const tls = require('tls');
-// Используем локальную базу данных. Она скачивается один раз при npm install
-// и проверяет IP внутри памяти компьютера мгновенно (без запросов в интернет)
 const geoip = require('geoip-lite'); 
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 60000;     
-const PARALLEL_LIMIT = 1000;   // Твоя желаемая скорость (как в NekoBox)
-const MAX_PING = 900;          
+const PARALLEL_LIMIT = 1000;   // Скорость проверки прокси
+const SOURCE_PARALLEL_LIMIT = 15; // Параллельность скачивания ИСТОЧНИКОВ
+const MAX_PING = 700;          // Таймаут для проверки прокси (мс)
+const SOURCE_TIMEOUT = 3500;   // Жесткий таймаут для скачивания одного источника (мс)
 
-// Настройка системного агента Node.js для работы с огромным количеством потоков
-https.globalAgent.maxSockets = PARALLEL_LIMIT + 50; // Запас для скачивания источников
+// Настройка системного агента Node.js
+https.globalAgent.maxSockets = PARALLEL_LIMIT + 100;
+https.globalAgent.keepAlive = true;
 
 // Ротация доменов для теста
 const TEST_DOMAINS = ['gosuslugi.ru', 'mos.ru', 'nalog.ru', 'vk.com', 'ok.ru', 'mail.ru', 'yandex.ru', 'dzen.ru', 't.me'];
@@ -74,22 +76,18 @@ const PARSED_CIDRS = ALLOWED_CIDRS.map(cidr => {
   return { ip: ipToLong(subnet), mask };
 });
 
-// Автоматическое приведение репозиториев к RAW ссылкам
 function normalizeToRawUrl(url) {
   try {
     let u = new URL(url);
-    // GitHub
     if (u.hostname === 'github.com' && !u.pathname.includes('/raw/')) {
       u.hostname = 'raw.githubusercontent.com';
       u.pathname = u.pathname.replace('/blob/', '/');
       return u.toString();
     }
-    // GitVerse
     if (u.hostname === 'gitverse.ru' && u.pathname.includes('/blob/')) {
       u.pathname = u.pathname.replace('/blob/', '/raw/');
       return u.toString();
     }
-    // Codeberg
     if (u.hostname === 'codeberg.org' && u.pathname.includes('/src/')) {
       u.pathname = u.pathname.replace('/src/', '/raw/');
       return u.toString();
@@ -98,12 +96,40 @@ function normalizeToRawUrl(url) {
   return url;
 }
 
+// ======================== ИСТОЧНИКИ (ОЧИЩЕННЫЙ СПИСОК) ========================
+async function discoverSources() {
+  const sources = new Set([
+    "https://obwl.vercel.app/configs/obchl.txt",
+    "https://obwl.vercel.app/configs/premium.txt",
+    "https://obwl.vercel.app/configs/selected.txt",
+    "https://obwl.vercel.app/configs/configs.txt",
+    "https://free-obwl.vercel.app/configs/configs.txt",
+    "https://raw.githubusercontent.com/SER38Off/happ-subscription/refs/heads/main/all-white-sub.txt",
+    "https://raw.githubusercontent.com/SER38Off/happ-subscription/refs/heads/main/all-white-lists-servers.txt",
+    "https://raw.githubusercontent.com/SER38Off/happ-subscription/refs/heads/main/best-white-lists-russia.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
+    "https://raw.githubusercontent.com/dequar/deqwl/refs/heads/main/deray.txt",
+    "https://raw.githubusercontent.com/v0id9/vpn-configs/refs/heads/main/vpn.txt",
+    "https://raw.githubusercontent.com/dmitriistekolnikov/Free_vpns_for_Russ/refs/heads/main/Vip.txt",
+    "https://raw.githubusercontent.com/AirLinkVPN1/AirLinkVPN/refs/heads/main/rkn_white_list",
+    "https://raw.githubusercontent.com/RKPchannel/RKP_bypass_configs/refs/heads/main/whitelist.txt",
+    "https://raw.githubusercontent.com/prominbro/sub/refs/heads/main/212.txt",
+    "https://raw.githubusercontent.com/prominbro/KfWL/refs/heads/main/KfWL.txt",
+    "https://sub.savvka.fun/whitelist",
+    "https://mifa.world/vless",
+    "https://mifa.world/turbo",
+    "https://hub.mos.ru/kfwl/sub/raw/main/sub.txt",
+    "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt"
+  ]);
+
+  // Конкретные Telegram-каналы
   const tgChannels = ['vless_configs', 'free_vless_vpn', 'vpn_reality', 'vless_reality_ru'];
   for (const channel of tgChannels) {
     sources.add(`https://t.me/s/${channel}`);
   }
 
-  // Применяем нормализацию ко всем ссылкам репозиториев для исключения дубликатов и битых форматов
   return Array.from(sources).map(normalizeToRawUrl);
 }
 
@@ -127,31 +153,28 @@ function isSniAllowed(sni) {
   return false;
 }
 
-// ======================== УЛУЧШЕННЫЙ ЭКСТРАКТОР ДЛЯ ТГ И HTML ========================
+// ======================== ЭКСТРАКТОР КРАФТОВЫХ И ТГ ТЕКСТОВ ========================
 function extractConfigsFromText(text) {
   const list = [];
-  
-  // Улучшенный безопасный разбор Telegram страниц (вытаскиваем полные данные из атрибутов)
+  if (!text) return list;
+
   if (text.includes('class="tgme_channel_info"') || text.includes('</html')) {
-    // Регулярка для вытаскивания полных ссылок из href ссылок (в превью тг они не бьются многоточием)
     const hrefRegex = /href="((?:vless|trojan):\/\/[^"]+)"/gi;
     let hrefMatch;
     while ((hrefMatch = hrefRegex.exec(text)) !== null) {
       list.push(hrefMatch[1]);
     }
-
-    // Очищаем HTML для поиска raw конфигов в тегах <code>
-    text = text.replace(/<br\s*\/?>/gi, '\n');
-    text = text.replace(/<[^>]+>/g, ' '); 
-    text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    text = text.replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>');
   }
 
-  // Стандартный поиск URIs во всем остальном тексте
   const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`\\]+/g;
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
 
-  // Поиск raw IP:PORT с контекстом
   const ipPortRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]{2,5})/g;
   const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   const pbkRegex = /pbk=([a-zA-Z0-9_-]+)/;
@@ -184,10 +207,7 @@ function extractFlags(text) {
 
 function getFlagEmoji(countryCode) {
   if (!countryCode || countryCode.length !== 2) return '🌐';
-  const codePoints = countryCode
-    .toUpperCase()
-    .split('')
-    .map(char => 127397 + char.charCodeAt(0));
+  const codePoints = countryCode.toUpperCase().split('').map(char => 127397 + char.charCodeAt(0));
   return String.fromCodePoint(...codePoints);
 }
 
@@ -197,42 +217,53 @@ function getCountryByIpLocal(ip) {
   return '🌐';
 }
 
+// Быстрое асинхронное скачивание с таймаутом
 function fetchTextWithHeaders(url) {
   return new Promise((resolve) => {
+    const lib = url.startsWith('https') ? https : http;
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
     };
 
-    https.get(url, { headers, timeout: 7000 }, (res) => {
+    let req = lib.get(url, { headers, timeout: SOURCE_TIMEOUT }, (res) => {
       if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
         return resolve(fetchTextWithHeaders(res.headers.location));
       }
-
-      if (res.statusCode !== 200) {
-        console.error(`⚠️ Ошибка загрузки [Код ${res.statusCode}]: ${url}`);
-        return resolve('');
-      }
+      if (res.statusCode !== 200) return resolve('');
 
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => resolve(data));
-    }).on('error', (err) => {
-      console.error(`❌ Ошибка сети для ${url}: ${err.message}`);
-      resolve('');
     });
+
+    req.on('error', () => resolve(''));
+    req.on('timeout', () => { req.destroy(); resolve(''); });
   });
+}
+
+// Параллельный пул загрузки файлов
+async function fetchAllSourcesParallel(sources) {
+  console.log(`📥 Параллельное скачивание ${sources.length} источников (лимит: ${SOURCE_PARALLEL_LIMIT} потоков)...`);
+  const results = [];
+  let index = 0;
+
+  async function sourceWorker() {
+    while (index < sources.length) {
+      const currentUrl = sources[index++];
+      const text = await fetchTextWithHeaders(currentUrl);
+      if (text) results.push(text);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(SOURCE_PARALLEL_LIMIT, sources.length) }, sourceWorker);
+  await Promise.all(workers);
+  return results;
 }
 
 // ======================== TLS ТЕСТ С РОТАЦИЕЙ ========================
 function checkTlsWithPing(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
-    const startTime = Date.now();
-    
-    const timeoutTimer = setTimeout(() => cleanup(false), MAX_PING);
-
     const randomSni = TEST_DOMAINS[Math.floor(Math.random() * TEST_DOMAINS.length)];
     const targetSni = sni || randomSni;
 
@@ -248,20 +279,17 @@ function checkTlsWithPing(host, port, sni) {
 
     let socket;
     try {
-      socket = tls.connect(options, () => {
-        const ping = Date.now() - startTime;
-        cleanup(ping < MAX_PING);
-      });
+      socket = tls.connect(options, () => cleanup(true));
     } catch (e) { return cleanup(false); }
 
     function cleanup(result) {
       if (!resolved) {
         resolved = true;
-        clearTimeout(timeoutTimer);
         if (socket) socket.destroy();
         resolve(result);
       }
     }
+
     if (socket) {
       socket.on('error', () => cleanup(false));
       socket.on('timeout', () => cleanup(false));
@@ -271,8 +299,11 @@ function checkTlsWithPing(host, port, sni) {
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
-  console.log(`🚀 Старт ультра-быстрого чекера (Параллельность: ${PARALLEL_LIMIT})...`);
+  console.time("⏱️ Общее время выполнения");
+  console.log(`🚀 Старт ультра-быстрого чекера...`);
+  
   const dynamicSources = await discoverSources();
+  const rawTexts = await fetchAllSourcesParallel(dynamicSources);
   
   const rawConfigs = [];
   const seenUrls = new Set();
@@ -281,11 +312,10 @@ async function main() {
   let totalExtracted = 0;
   let rejectedByFilters = 0;
 
-  // 1. Сбор и фильтрация ссылок
-  for (const src of dynamicSources) {
-    let text = await fetchTextWithHeaders(src);
-    if (!text) continue;
+  console.log("⚙️ Парсинг и мгновенная дедупликация...");
 
+  // Быстрая параллельная сборка из скачанных ответов
+  for (const text of rawTexts) {
     const matches = extractConfigsFromText(text);
     
     for (let line of matches) {
@@ -334,14 +364,14 @@ async function main() {
     if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`\n📊 Всего извлечено ссылок: ${totalExtracted}`);
+  console.log(`\n📊 Извлечено уникальных ссылок: ${totalExtracted}`);
   console.log(`✂️ Отсеяно фильтрами (не БС SNI/CIDR): ${rejectedByFilters}`);
-  console.log(`📥 Запуск теста в ${PARALLEL_LIMIT} потоков для ${rawConfigs.length} конфигов...`);
+  console.log(`📥 Запуск высокоскоростного теста (${PARALLEL_LIMIT} потоков)...`);
 
   const liveConfigs = [];
   let index = 0;
 
-  // 2. Асинхронные воркеры
+  // Асинхронные воркеры чекера
   async function worker() {
     while (index < rawConfigs.length) {
       const currentIdx = index++;
@@ -374,6 +404,7 @@ async function main() {
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
   console.log('💾 Результат сохранен в configs.txt!');
+  console.timeEnd("⏱️ Общее время выполнения");
 }
 
 main();
