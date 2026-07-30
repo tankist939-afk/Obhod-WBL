@@ -6,10 +6,10 @@ const geoip = require('geoip-lite');
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 60000;     
-const PARALLEL_LIMIT = 1000;   // Скорость проверки прокси
+const PARALLEL_LIMIT = 500;       // Снижено до 500 для предотвращения потерь сокетов OS
 const SOURCE_PARALLEL_LIMIT = 15; // Параллельность скачивания ИСТОЧНИКОВ
-const MAX_PING = 700;          // Таймаут для проверки прокси (мс)
-const SOURCE_TIMEOUT = 3500;   // Жесткий таймаут для скачивания одного источника (мс)
+const MAX_PING = 1000;            // Таймаут для проверки прокси (мс)
+const SOURCE_TIMEOUT = 4000;       // Жесткий таймаут для источников (мс)
 
 // Настройка системного агента Node.js
 https.globalAgent.maxSockets = PARALLEL_LIMIT + 100;
@@ -96,7 +96,7 @@ function normalizeToRawUrl(url) {
   return url;
 }
 
-// ======================== ИСТОЧНИКИ (ОЧИЩЕННЫЙ СПИСОК) ========================
+// ======================== ИСТОЧНИКИ (ОЧИЩЕНЫ ОТ ДУБЛИКАТОВ) ========================
 async function discoverSources() {
   const sources = new Set([
     "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/selected.txt",
@@ -127,7 +127,6 @@ async function discoverSources() {
     "https://p.kfwl.lol/os=android/h=CB522960-E2A9-7A19-12CB-FD12FEC71E19/https://happ.dska.su/https://vip-get.ru/subscriptions/NjBmOWJiMzMtNmM0OC00MWYzLThkMGQtNDIwZjgzYmMzMjYx?h=CB522960-E2A9-7A19-12CB-FD12FEC71E19",
     "https://gist.githubusercontent.com/HalyavusVPNUS/a93def732d3c624029c09c393dd0772e/raw/c1804c102de504bbc4034d9752579b77398f371d/%25D0%25BA%25D0%25BE%25D0%25BD%25D1%2584%25D0%25B8%25D0%25B3%25D0%25B8",
     "https://hub.mos.ru/kfwl/subsidia/raw/main/all",
-    "https://raw.githubusercontent.com/s0ulcoil/rkvpn/refs/heads/main/randomkeys",
     "https://happ.ring-team.ru/sub/xm1w9dua83",
     "https://happ.ring-team.ru/sub/scb3faxa5f",
     "https://cdn.statically.io/gh/kama55726/KomaryServers/main/KomaryServ",
@@ -212,7 +211,6 @@ async function discoverSources() {
     "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt"
   ]);
 
-  // Конкретные Telegram-каналы
   const tgChannels = ['vless_configs', 'free_vless_vpn', 'vpn_reality', 'vless_reality_ru'];
   for (const channel of tgChannels) {
     sources.add(`https://t.me/s/${channel}`);
@@ -241,17 +239,12 @@ function isSniAllowed(sni) {
   return false;
 }
 
-// ======================== ЭКСТРАКТОР КРАФТОВЫХ И ТГ ТЕКСТОВ ========================
+// ======================== ЧИСТЫЙ ЭКСТРАКТОР ========================
 function extractConfigsFromText(text) {
   const list = [];
   if (!text) return list;
 
   if (text.includes('class="tgme_channel_info"') || text.includes('</html')) {
-    const hrefRegex = /href="((?:vless|trojan):\/\/[^"]+)"/gi;
-    let hrefMatch;
-    while ((hrefMatch = hrefRegex.exec(text)) !== null) {
-      list.push(hrefMatch[1]);
-    }
     text = text.replace(/<br\s*\/?>/gi, '\n')
                 .replace(/<[^>]+>/g, ' ')
                 .replace(/&amp;/g, '&')
@@ -259,29 +252,11 @@ function extractConfigsFromText(text) {
                 .replace(/&gt;/g, '>');
   }
 
+  // Извлекаем только валидные готовые VLESS / TROJAN ссылки
   const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`\\]+/g;
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
 
-  const ipPortRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]{2,5})/g;
-  const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  const pbkRegex = /pbk=([a-zA-Z0-9_-]+)/;
-  const sniRegex = /sni=([a-zA-Z0-9\.-]+)/;
-
-  let match;
-  while ((match = ipPortRegex.exec(text)) !== null) {
-    const ip = match[1];
-    const port = match[2];
-    const context = text.substring(Math.max(0, match.index - 250), Math.min(text.length, match.index + 400));
-    const uuidMatch = context.match(uuidRegex);
-    
-    if (uuidMatch) {
-      const uuid = uuidMatch[0];
-      const pbk = context.match(pbkRegex)?.[1] || '';
-      const sni = context.match(sniRegex)?.[1] || 'gosuslugi.ru';
-      list.push(`vless://${uuid}@${ip}:${port}?security=reality&encryption=none&pbk=${pbk}&sni=${sni}&fp=chrome&type=tcp&flow=xtls-rprx-vision#🌐 | ${sni} | Obhod WBL`);
-    }
-  }
   return list;
 }
 
@@ -305,7 +280,6 @@ function getCountryByIpLocal(ip) {
   return '🌐';
 }
 
-// Быстрое асинхронное скачивание с таймаутом
 function fetchTextWithHeaders(url) {
   return new Promise((resolve) => {
     const lib = url.startsWith('https') ? https : http;
@@ -329,7 +303,6 @@ function fetchTextWithHeaders(url) {
   });
 }
 
-// Параллельный пул загрузки файлов
 async function fetchAllSourcesParallel(sources) {
   console.log(`📥 Параллельное скачивание ${sources.length} источников (лимит: ${SOURCE_PARALLEL_LIMIT} потоков)...`);
   const results = [];
@@ -348,7 +321,7 @@ async function fetchAllSourcesParallel(sources) {
   return results;
 }
 
-// ======================== TLS ТЕСТ С РОТАЦИЕЙ ========================
+// ======================== УЛУЧШЕННЫЙ TLS ТЕСТ ========================
 function checkTlsWithPing(host, port, sni) {
   return new Promise((resolve) => {
     let resolved = false;
@@ -365,15 +338,25 @@ function checkTlsWithPing(host, port, sni) {
       ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384'
     };
 
+    let timer = setTimeout(() => {
+      cleanup(false);
+    }, MAX_PING + 100);
+
     let socket;
     try {
       socket = tls.connect(options, () => cleanup(true));
-    } catch (e) { return cleanup(false); }
+    } catch (e) { 
+      return cleanup(false); 
+    }
 
     function cleanup(result) {
       if (!resolved) {
         resolved = true;
-        if (socket) socket.destroy();
+        clearTimeout(timer);
+        if (socket) {
+          socket.removeAllListeners();
+          socket.destroy();
+        }
         resolve(result);
       }
     }
@@ -388,7 +371,7 @@ function checkTlsWithPing(host, port, sni) {
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
   console.time("⏱️ Общее время выполнения");
-  console.log(`🚀 Старт ультра-быстрого чекера...`);
+  console.log(`🚀 Старт очищенного чекера...`);
   
   const dynamicSources = await discoverSources();
   const rawTexts = await fetchAllSourcesParallel(dynamicSources);
@@ -402,12 +385,16 @@ async function main() {
 
   console.log("⚙️ Парсинг и мгновенная дедупликация...");
 
-  // Быстрая параллельная сборка из скачанных ответов
+  // Быстрый единый цикл обработки всех текстов
   for (const text of rawTexts) {
+    if (rawConfigs.length >= MAX_CONFIGS) break;
+
     const matches = extractConfigsFromText(text);
     
     for (let line of matches) {
+      if (rawConfigs.length >= MAX_CONFIGS) break;
       if (!line || seenUrls.has(line)) continue;
+      
       totalExtracted++;
 
       let urlPart = line, comment = '';
@@ -428,7 +415,6 @@ async function main() {
         try { sni = decodeURIComponent(sniMatch[1]); } catch (e) { sni = sniMatch[1]; }
       }
 
-      // ФИЛЬТРАЦИЯ
       const sniValid = isSniAllowed(sni);
       const cidrValid = isIpInCidr(hostOrIp);
 
@@ -446,20 +432,16 @@ async function main() {
       seenUrls.add(line);
       seenServers.add(serverKey); 
       rawConfigs.push({ urlPart, hostOrIp, port, sni, parsedFlag });
-
-      if (rawConfigs.length >= MAX_CONFIGS) break;
     }
-    if (rawConfigs.length >= MAX_CONFIGS) break;
   }
 
-  console.log(`\n📊 Извлечено уникальных ссылок: ${totalExtracted}`);
+  console.log(`\n📊 Извлечено уникальных валидных ссылок: ${totalExtracted}`);
   console.log(`✂️ Отсеяно фильтрами (не БС SNI/CIDR): ${rejectedByFilters}`);
-  console.log(`📥 Запуск высокоскоростного теста (${PARALLEL_LIMIT} потоков)...`);
+  console.log(`📥 Запуск теста реального подключения (${PARALLEL_LIMIT} потоков)...`);
 
   const liveConfigs = [];
   let index = 0;
 
-  // Асинхронные воркеры чекера
   async function worker() {
     while (index < rawConfigs.length) {
       const currentIdx = index++;
