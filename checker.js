@@ -1,22 +1,30 @@
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
-const tls = require('tls');
+const net = require('net');
 const geoip = require('geoip-lite'); 
+
+// Подключение агентов прокси (с фоллбеком)
+let SocksProxyAgent, HttpsProxyAgent;
+try {
+  SocksProxyAgent = require('socks-proxy-agent').SocksProxyAgent;
+  HttpsProxyAgent = require('https-proxy-agent').HttpsProxyAgent;
+} catch (e) {
+  // Базовая проверка через TCP сокеты, если агенты не установлены
+}
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 60000;     
-const PARALLEL_LIMIT = 500;       // Снижено до 500 для предотвращения потерь сокетов OS
-const SOURCE_PARALLEL_LIMIT = 15; // Параллельность скачивания ИСТОЧНИКОВ
-const MAX_PING = 1000;            // Таймаут для проверки прокси (мс)
-const SOURCE_TIMEOUT = 4000;       // Жесткий таймаут для источников (мс)
+const PARALLEL_LIMIT = 300;       // Параллельность проверки прокси
+const SOURCE_PARALLEL_LIMIT = 25; // Параллельность скачивания источников
+const MAX_PING = 2500;            // Таймаут проверки через прокси (мс)
+const SOURCE_TIMEOUT = 7000;       // Таймаут для источников (мс)
 
-// Настройка системного агента Node.js
+// Тестовый эндпоинт Google/Android для проверки подлинного соединения
+const PROXY_TEST_URL = 'http://www.gstatic.com/generate_204'; 
+
+http.globalAgent.maxSockets = PARALLEL_LIMIT + 100;
 https.globalAgent.maxSockets = PARALLEL_LIMIT + 100;
-https.globalAgent.keepAlive = true;
-
-// Ротация доменов для теста
-const TEST_DOMAINS = ['gosuslugi.ru', 'mos.ru', 'nalog.ru', 'vk.com', 'ok.ru', 'mail.ru', 'yandex.ru', 'dzen.ru', 't.me'];
 
 // ======================== БЕЛЫЕ СПИСКИ (ФИЛЬТРЫ) ========================
 const WHITELIST_DOMAINS = new Set([
@@ -96,9 +104,9 @@ function normalizeToRawUrl(url) {
   return url;
 }
 
-// ======================== ИСТОЧНИКИ (ОЧИЩЕНЫ ОТ ДУБЛИКАТОВ) ========================
+// ======================== ВАШ ТОЧНЫЙ СПИСОК ИСТОЧНИКОВ ========================
 async function discoverSources() {
-  const sources = new Set([
+  const sources = [
     "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/selected.txt",
     "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/wl.txt",
     "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/merged.txt",
@@ -209,14 +217,9 @@ async function discoverSources() {
     "https://mifa.world/turbo",
     "https://hub.mos.ru/kfwl/sub/raw/main/sub.txt",
     "https://codeberg.org/kfwl/sub/raw/branch/main/sub.txt"
-  ]);
+  ];
 
-  const tgChannels = ['vless_configs', 'free_vless_vpn', 'vpn_reality', 'vless_reality_ru'];
-  for (const channel of tgChannels) {
-    sources.add(`https://t.me/s/${channel}`);
-  }
-
-  return Array.from(sources).map(normalizeToRawUrl);
+  return Array.from(new Set(sources)).map(normalizeToRawUrl);
 }
 
 // ======================== УТИЛИТЫ ВАЛИДАЦИИ ========================
@@ -244,15 +247,16 @@ function extractConfigsFromText(text) {
   const list = [];
   if (!text) return list;
 
-  if (text.includes('class="tgme_channel_info"') || text.includes('</html')) {
-    text = text.replace(/<br\s*\/?>/gi, '\n')
-                .replace(/<[^>]+>/g, ' ')
-                .replace(/&amp;/g, '&')
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>');
+  // Если контент вернулся в Base64 (частая практика у подписок)
+  if (!text.includes('vless://') && !text.includes('trojan://')) {
+    try {
+      const decoded = Buffer.from(text.trim(), 'base64').toString('utf-8');
+      if (decoded.includes('vless://') || decoded.includes('trojan://')) {
+        text = decoded;
+      }
+    } catch (e) {}
   }
 
-  // Извлекаем только валидные готовые VLESS / TROJAN ссылки
   const linkRegex = /(vless|trojan):\/\/[^\s"'<>\`\\]+/g;
   const linkMatches = text.match(linkRegex) || [];
   linkMatches.forEach(link => list.push(link.trim()));
@@ -282,14 +286,22 @@ function getCountryByIpLocal(ip) {
 
 function fetchTextWithHeaders(url) {
   return new Promise((resolve) => {
-    const lib = url.startsWith('https') ? https : http;
+    let parsedUrl;
+    try { parsedUrl = new URL(url); } catch (e) { return resolve(''); }
+
+    const lib = parsedUrl.protocol === 'https:' ? https : http;
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*'
     };
 
     let req = lib.get(url, { headers, timeout: SOURCE_TIMEOUT }, (res) => {
       if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
-        return resolve(fetchTextWithHeaders(res.headers.location));
+        let redirectUrl = res.headers.location;
+        if (!redirectUrl.startsWith('http')) {
+          redirectUrl = new URL(redirectUrl, url).toString();
+        }
+        return resolve(fetchTextWithHeaders(redirectUrl));
       }
       if (res.statusCode !== 200) return resolve('');
 
@@ -304,7 +316,7 @@ function fetchTextWithHeaders(url) {
 }
 
 async function fetchAllSourcesParallel(sources) {
-  console.log(`📥 Параллельное скачивание ${sources.length} источников (лимит: ${SOURCE_PARALLEL_LIMIT} потоков)...`);
+  console.log(`📥 Скачивание всех ${sources.length} предоставленных источников...`);
   const results = [];
   let index = 0;
 
@@ -321,60 +333,71 @@ async function fetchAllSourcesParallel(sources) {
   return results;
 }
 
-// ======================== УЛУЧШЕННЫЙ TLS ТЕСТ ========================
-function checkTlsWithPing(host, port, sni) {
+// ======================== ПРОВЕРКА ЧЕРЕЗ GENERATE_204 ========================
+function checkProxyConnection(host, port, protocol = 'http') {
   return new Promise((resolve) => {
     let resolved = false;
-    const randomSni = TEST_DOMAINS[Math.floor(Math.random() * TEST_DOMAINS.length)];
-    const targetSni = sni || randomSni;
+    const proxyUrl = `${protocol}://${host}:${port}`;
+
+    let agent;
+    if (protocol.startsWith('socks') && SocksProxyAgent) {
+      agent = new SocksProxyAgent(proxyUrl);
+    } else if (HttpsProxyAgent) {
+      agent = new HttpsProxyAgent(proxyUrl);
+    }
 
     const options = {
-      host: host,
-      port: parseInt(port, 10),
-      servername: targetSni,
-      rejectUnauthorized: false,
+      method: 'GET',
       timeout: MAX_PING,
-      minVersion: 'TLSv1.3',
-      ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384'
+      agent: agent
     };
 
-    let timer = setTimeout(() => {
-      cleanup(false);
-    }, MAX_PING + 100);
-
-    let socket;
-    try {
-      socket = tls.connect(options, () => cleanup(true));
-    } catch (e) { 
-      return cleanup(false); 
-    }
-
-    function cleanup(result) {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timer);
-        if (socket) {
-          socket.removeAllListeners();
-          socket.destroy();
-        }
-        resolve(result);
-      }
-    }
-
-    if (socket) {
+    if (!agent) {
+      const socket = net.connect({ host, port: parseInt(port, 10), timeout: MAX_PING }, () => {
+        cleanup(true);
+      });
       socket.on('error', () => cleanup(false));
       socket.on('timeout', () => cleanup(false));
+
+      function cleanup(status) {
+        if (!resolved) {
+          resolved = true;
+          socket.destroy();
+          resolve(status);
+        }
+      }
+      return;
     }
+
+    const httpLib = PROXY_TEST_URL.startsWith('https') ? https : http;
+    const req = httpLib.get(PROXY_TEST_URL, options, (res) => {
+      if (!resolved) {
+        resolved = true;
+        resolve(res.statusCode === 204 || res.statusCode === 200);
+      }
+    });
+
+    req.on('error', () => {
+      if (!resolved) { resolved = true; resolve(false); }
+    });
+
+    req.on('timeout', () => {
+      if (!resolved) {
+        resolved = true;
+        req.destroy();
+        resolve(false);
+      }
+    });
   });
 }
 
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
   console.time("⏱️ Общее время выполнения");
-  console.log(`🚀 Старт очищенного чекера...`);
+  console.log(`🚀 Запуск парсера по указанным 105 источникам...`);
   
-  const dynamicSources = await discoverSources();
-  const rawTexts = await fetchAllSourcesParallel(dynamicSources);
+  const sources = await discoverSources();
+  const rawTexts = await fetchAllSourcesParallel(sources);
   
   const rawConfigs = [];
   const seenUrls = new Set();
@@ -383,9 +406,8 @@ async function main() {
   let totalExtracted = 0;
   let rejectedByFilters = 0;
 
-  console.log("⚙️ Парсинг и мгновенная дедупликация...");
+  console.log("⚙️ Извлечение конфигураций и валидация по белым спискам...");
 
-  // Быстрый единый цикл обработки всех текстов
   for (const text of rawTexts) {
     if (rawConfigs.length >= MAX_CONFIGS) break;
 
@@ -415,6 +437,7 @@ async function main() {
         try { sni = decodeURIComponent(sniMatch[1]); } catch (e) { sni = sniMatch[1]; }
       }
 
+      // Проверка на белые списки (по SNI или CIDR)
       const sniValid = isSniAllowed(sni);
       const cidrValid = isIpInCidr(hostOrIp);
 
@@ -435,9 +458,9 @@ async function main() {
     }
   }
 
-  console.log(`\n📊 Извлечено уникальных валидных ссылок: ${totalExtracted}`);
-  console.log(`✂️ Отсеяно фильтрами (не БС SNI/CIDR): ${rejectedByFilters}`);
-  console.log(`📥 Запуск теста реального подключения (${PARALLEL_LIMIT} потоков)...`);
+  console.log(`\n📊 Найдено ссылок во всех подписках: ${totalExtracted}`);
+  console.log(`✂️ Не прошли фильтр Белых списков (SNI/CIDR): ${rejectedByFilters}`);
+  console.log(`📥 Проверка живых серверов (${PARALLEL_LIMIT} параллельных потоков)...`);
 
   const liveConfigs = [];
   let index = 0;
@@ -448,7 +471,7 @@ async function main() {
       const cfg = rawConfigs[currentIdx];
       if (!cfg) continue;
 
-      const alive = await checkTlsWithPing(cfg.hostOrIp, cfg.port, cfg.sni);
+      const alive = await checkProxyConnection(cfg.hostOrIp, cfg.port, 'http');
       if (alive) {
         let finalFlag = '🌐';
         const isIp = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(cfg.hostOrIp);
@@ -467,10 +490,10 @@ async function main() {
   const workers = Array.from({ length: PARALLEL_LIMIT }, worker);
   await Promise.all(workers);
 
-  console.log(`✅ Готово! Финальный отбор прошли: ${liveConfigs.length} серверов.`);
+  console.log(`✅ Проверку завершено! Найдено активных серверов: ${liveConfigs.length}`);
   
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const header = `#profile-title: Obhod WBL Turbo Cleaner\n#profile-update-interval: 1\n#announce: 👑 Турбо база | Живых: ${liveConfigs.length} | ${timestamp} UTC\n\n`;
+  const header = `#profile-title: Obhod WBL Full Collector\n#profile-update-interval: 1\n#announce: 👑 База прокси | Живых: ${liveConfigs.length} | ${timestamp} UTC\n\n`;
   
   fs.writeFileSync('configs.txt', header + liveConfigs.join('\n'));
   console.log('💾 Результат сохранен в configs.txt!');
