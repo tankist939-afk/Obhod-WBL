@@ -1,11 +1,14 @@
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
+const net = require('net');
 
 // ======================== НАСТРОЙКИ ========================
 const MAX_CONFIGS = 100000;        
 const SOURCE_PARALLEL_LIMIT = 25; 
 const SOURCE_TIMEOUT = 8000;       
+const PING_TIMEOUT = 3000;         // Таймаут проверки порта (как пинг в NekoBox+)
+const PING_PARALLEL_LIMIT = 50;    // Параллельность проверки серверов
 
 // ======================== СЛОВАРИ ФЛАГОВ ========================
 const URL_FLAG_MAP = {
@@ -124,7 +127,7 @@ function extractFlag(rawLine, sni, comment) {
 }
 
 function discoverSources() {
-  const sources = [  
+  const sources = [
   "https://raw.githubusercontent.com/55gY/tdl-msgproce/a6bc00a9b10a124182e8525acf27e42742105f38/config.yaml",
   "https://raw.githubusercontent.com/55gY/tdl-msgproce/refs/heads/main/config.yaml",
   "https://raw.githubusercontent.com/55prosek-lgtm/vpn_config_for_russia/main/blacklist.txt",
@@ -1070,7 +1073,7 @@ function discoverSources() {
   "https://raw.githubusercontent.com/JaneCCP/BPB-Worker-Panel/3fbe24745cddd70c6901fdcab41a9937c0442bd1/docs/en/mkdocs.yml",
   "https://raw.githubusercontent.com/JaneCCP/BPB-Worker-Panel/3fbe24745cddd70c6901fdcab41a9937c0442bd1/docs/fa/mkdocs.yml",
   "https://raw.githubusercontent.com/Jeamorg/Collect/2d10cc5d8fbdcbba34d19bdf1387e198d2025892/Air.txt"           
-  ];
+ ];
   return Array.from(new Set(sources)).map(normalizeToRawUrl);
 }
 
@@ -1146,6 +1149,35 @@ async function fetchAllSourcesParallel(sources) {
   return results;
 }
 
+// Проверка доступности хоста и порта (TCP Handshake / TCP Ping в стиле NekoBox+)
+function checkTcpPing(host, port) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let status = false;
+
+    socket.setTimeout(PING_TIMEOUT);
+
+    socket.on('connect', () => {
+      status = true;
+      socket.destroy();
+    });
+
+    socket.on('timeout', () => {
+      socket.destroy();
+    });
+
+    socket.on('error', () => {
+      socket.destroy();
+    });
+
+    socket.on('close', () => {
+      resolve(status);
+    });
+
+    socket.connect(parseInt(port, 10), host);
+  });
+}
+
 // ======================== ГЛАВНЫЙ ПРОЦЕСС ========================
 async function main() {
   console.time("⏱️ Общее время выполнения");
@@ -1154,7 +1186,7 @@ async function main() {
   const sources = discoverSources();
   const rawTexts = await fetchAllSourcesParallel(sources);
   
-  const finalConfigs = [];
+  const candidateConfigs = [];
   const seenUrls = new Set();
   const seenServers = new Set(); 
   let totalExtracted = 0;
@@ -1163,11 +1195,11 @@ async function main() {
   console.log("⚙️ Парсинг, фильтрация по SNI/CIDR и дедупликация...");
 
   for (const text of rawTexts) {
-    if (finalConfigs.length >= MAX_CONFIGS) break;
+    if (candidateConfigs.length >= MAX_CONFIGS) break;
     const matches = extractConfigsFromText(text);
     
     for (let line of matches) {
-      if (finalConfigs.length >= MAX_CONFIGS) break;
+      if (candidateConfigs.length >= MAX_CONFIGS) break;
       if (!line || seenUrls.has(line)) continue;
       
       totalExtracted++;
@@ -1206,13 +1238,36 @@ async function main() {
       const flag = extractFlag(line, sni, comment);
       const label = `${flag} Obhod WBL | ${currentSni}`;
       
-      finalConfigs.push(`${urlPart}#${label}`);
+      candidateConfigs.push({
+        configString: `${urlPart}#${label}`,
+        host: hostOrIp,
+        port: port
+      });
     }
   }
 
   console.log(`\n📊 Найдено сырых конфигураций: ${totalExtracted}`);
   console.log(`✂️ Отсеяно фильтрами: ${rejectedByFilters}`);
-  console.log(`✅ Итого добавлено: ${finalConfigs.length}`);
+  console.log(`🔍 Проверка доступности (TCP Ping) для ${candidateConfigs.length} отфильтрованных серверов...`);
+
+  // Проверяем пингом только прошедшие фильтрацию сервера паралелльными пачками
+  const finalConfigs = [];
+  let index = 0;
+
+  async function pingWorker() {
+    while (index < candidateConfigs.length) {
+      const item = candidateConfigs[index++];
+      const isAlive = await checkTcpPing(item.host, item.port);
+      if (isAlive) {
+        finalConfigs.push(item.configString);
+      }
+    }
+  }
+
+  const pingWorkers = Array.from({ length: Math.min(PING_PARALLEL_LIMIT, candidateConfigs.length) }, pingWorker);
+  await Promise.all(pingWorkers);
+
+  console.log(`✅ Итого добавлено живых: ${finalConfigs.length}`);
 
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const header = `#profile-title: Obhod WBL Filtered\n#profile-update-interval: 1\n#announce: 👑 База прокси WBL | Всего: ${finalConfigs.length} | ${timestamp} UTC\n\n`;
