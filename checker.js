@@ -128,6 +128,17 @@ function extractFlag(rawLine, sni, comment) {
 
 function discoverSources() {
   const sources = [
+  "https://hub.mos.ru/kfwl/auto/raw/main/fullbl",
+  "https://raw.githubusercontent.com/gazeta404/rain_vpn_bs/main/bs.txt",
+  "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/merged.txt",
+  "https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/whitelist.txt",
+  "https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/blacklist.txt",
+  "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt",
+  "https://gitverse.ru/api/repos/bikinitw22/apelsintel/raw/branch/main/alive_bs.txt",
+  "https://raw.githubusercontent.com/ByeWhiteLists/ByeWhiteLists2/refs/heads/main/ByeWhiteLists2.txt",
+  "https://alley.serv00.net/1",
+  "https://gitverse.ru/api/repos/gidro/white/raw/branch/master/subscription.txt",
+  "https://gidroksi.fun/black-list",
   "https://raw.githubusercontent.com/55gY/tdl-msgproce/a6bc00a9b10a124182e8525acf27e42742105f38/config.yaml",
   "https://raw.githubusercontent.com/55gY/tdl-msgproce/refs/heads/main/config.yaml",
   "https://raw.githubusercontent.com/55prosek-lgtm/vpn_config_for_russia/main/blacklist.txt",
