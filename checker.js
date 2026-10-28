@@ -128,6 +128,7 @@ function extractFlag(rawLine, sni, comment) {
 
 function discoverSources() {
   const sources = [
+  "https://sub.vlessfo.ru/vlessforu/working_configs.txt",
   "https://hub.mos.ru/kfwl/auto/raw/main/fullbl",
   "https://raw.githubusercontent.com/gazeta404/rain_vpn_bs/main/bs.txt",
   "https://gitverse.ru/api/repos/bywarm/rser/raw/branch/master/merged.txt",
